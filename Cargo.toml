@@ -1,0 +1,19 @@
+[package]
+name = "iron-dumbo"
+version = "0.1.0"
+edition = "2024"
+
+[dependencies]
+
+atlas-common = { path = "../Atlas/Atlas-Common" }
+atlas-core = { path = "../Atlas/Atlas-Core" }
+atlas-communication = { path = "../Atlas/Atlas-Communication" }
+atlas-metrics = { path = "../Atlas/Atlas-Metrics" }
+
+getset = { version = "0" }
+either = "*"
+
+anyhow = "1.0"
+thiserror = "2"
+
+tracing = "*"
