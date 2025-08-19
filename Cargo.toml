@@ -10,10 +10,15 @@ atlas-core = { path = "../Atlas/Atlas-Core" }
 atlas-communication = { path = "../Atlas/Atlas-Communication" }
 atlas-metrics = { path = "../Atlas/Atlas-Metrics" }
 
+typesafe_builder = "*"
 getset = { version = "0" }
 either = "*"
+itertools = "*"
 
 anyhow = "1.0"
 thiserror = "2"
+bincode = "*"
 
 tracing = "*"
+
+serde = { version = "1.0", features = ["derive"] }

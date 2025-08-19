@@ -1,32 +1,31 @@
-use atlas_common::node_id::NodeId;
+use atlas_common::crypto::threshold_crypto::PartialSignature;
 use getset::{CopyGetters, Getters};
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Clone, PartialEq, Eq, Getters, CopyGetters)]
+#[derive(Debug, Clone, PartialEq, Eq, Getters, CopyGetters, Serialize, Deserialize)]
 pub(super) struct AsyncBinaryAgreementMessage {
-    #[get = "pub (super)"]
-    message_type: AsyncBinaryAgreementMessageType,
     #[get_copy = "pub(super)"]
     round: usize,
-    #[get_copy = "pub(super)"]
-    sender: NodeId,
+    #[get = "pub"]
+    message_type: AsyncBinaryAgreementMessageType,
 }
 
 impl AsyncBinaryAgreementMessage {
     pub(super) fn new(
         message_type: AsyncBinaryAgreementMessageType,
         round: usize,
-        sender: NodeId,
     ) -> Self {
         Self {
             message_type,
             round,
-            sender,
         }
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum AsyncBinaryAgreementMessageType {
-    Est { estimate: bool },
-    Aux { estimate: bool },
+    Val { estimate: bool },
+    Aux { accepted_estimates: Vec<bool> },
+    Conf { feasible_values: Vec<bool>, partial_signature: PartialSignature },
+    Finish { value : bool }
 }
