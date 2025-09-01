@@ -2,7 +2,7 @@ use std::collections::VecDeque;
 use atlas_communication::message::StoredMessage;
 use crate::async_bin_agreement::messages::AsyncBinaryAgreementMessage;
 
-#[derive(Default)]
+#[derive(Default, Debug)]
 pub(super) struct PendingMessages {
     current_round_base: usize,
     per_round_messages: VecDeque<Vec<StoredMessage<AsyncBinaryAgreementMessage>>>,

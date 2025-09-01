@@ -20,6 +20,10 @@ impl AsyncBinaryAgreementMessage {
             round,
         }
     }
+
+    pub(super) fn into_inner(self) -> (usize, AsyncBinaryAgreementMessageType) {
+        (self.round, self.message_type)
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]

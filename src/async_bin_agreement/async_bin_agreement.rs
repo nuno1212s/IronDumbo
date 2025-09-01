@@ -7,17 +7,21 @@ use crate::async_bin_agreement::pending_messages::PendingMessages;
 use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
 use atlas_communication::message::StoredMessage;
+use getset::Getters;
 
 /// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
+#[derive(Debug)]
 pub(super) struct ThresholdKeys(PublicKeySet, PrivateKeyPart);
 
 /// Represents the state of an asynchronous binary agreement protocol.
 /// It contains the current round, the input bit, the quorum information,
 /// the current round data, the previous rounds, and the pending messages.
+#[derive(Debug, Getters)]
 pub(super) struct AsyncBinaryAgreement {
     round: usize,
     input_bit: bool,
     quorum_info: QuorumInfo,
+    #[get = "pub(super)"]
     current_round: RoundData,
     previous_rounds: Vec<RoundData>,
     pending_messages: PendingMessages,
@@ -52,58 +56,51 @@ impl AsyncBinaryAgreement {
     where
         NT: AsyncBinaryAgreementSendNode,
     {
-        let async_bin_message = message.message();
+        
+        let round = message.message().round();
 
-        if async_bin_message.round() > self.round {
+        if round > self.round {
             // If the message is from a future round, we need to update our state
             self.pending_messages
-                .add_message(async_bin_message.round(), message);
+                .add_message(round, message);
 
             return AsyncBinaryAgreementResult::MessageQueued;
-        } else if async_bin_message.round() < self.round {
+        } else if round < self.round {
             // If the message is from a past round, we can ignore it
             return AsyncBinaryAgreementResult::MessageIgnored;
         }
+        
+        let (header, async_bin_message) = message.clone().into_inner();
 
-        match async_bin_message.message_type() {
-            AsyncBinaryAgreementMessageType::Val { .. } => {
-                self.process_val_message(message, network)
+        let (_, message_type) = async_bin_message.into_inner();
+        
+        let sender = header.from();
+        
+        let result = match message_type {
+            AsyncBinaryAgreementMessageType::Val { estimate } => {
+                self.current_round.accept_estimate(sender, estimate)
             }
-            AsyncBinaryAgreementMessageType::Aux { .. } => {
-                self.process_aux_message(message, network)
+            AsyncBinaryAgreementMessageType::Aux { accepted_estimates } => {
+                self.current_round.accept_auxiliary(sender, accepted_estimates)
             }
-            AsyncBinaryAgreementMessageType::Conf { .. } => {
-                self.process_conf_message(message, network)
-            },
-            AsyncBinaryAgreementMessageType::Finish { .. } => todo!()
-        }
-    }
-
-    fn process_val_message<NT>(
-        &mut self,
-        message: StoredMessage<AsyncBinaryAgreementMessage>,
-        network: &NT,
-    ) -> AsyncBinaryAgreementResult
-    where
-        NT: AsyncBinaryAgreementSendNode,
-    {
-        let header = message.header();
-
-        let AsyncBinaryAgreementMessageType::Val { estimate } = message.message().message_type()
-        else {
-            unreachable!()
+            AsyncBinaryAgreementMessageType::Conf { feasible_values, partial_signature } => {
+                self.current_round.accept_confirmation(sender, feasible_values, partial_signature)
+            }
+            AsyncBinaryAgreementMessageType::Finish { value } => {
+                self.current_round.accept_finish(sender, value)
+            }
         };
 
-        match self.current_round.accept_estimate(header.from(), *estimate) {
+        match result {
             RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed(message),
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
                 // If we are in a failed state, we ignore the message
                 self.advance_round(next_estimate);
                 AsyncBinaryAgreementResult::MessageIgnored
             }
-            RoundDataVoteAcceptResult::Finalized => {
+            RoundDataVoteAcceptResult::Finalized(result) => {
                 // If we are in a finalized state, we ignore the message
-                AsyncBinaryAgreementResult::Decided(message)
+                AsyncBinaryAgreementResult::Decided(result, message)
             }
             RoundDataVoteAcceptResult::BroadcastEst(estimate) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -137,46 +134,8 @@ impl AsyncBinaryAgreement {
 
                 AsyncBinaryAgreementResult::Processed(message)
             }
-            RoundDataVoteAcceptResult::Queue => {
-                // If we are collecting echoes, we queue the message for later processing
-                self.pending_messages.add_message(self.round, message);
-                AsyncBinaryAgreementResult::MessageQueued
-            }
-            RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted => {
-                AsyncBinaryAgreementResult::MessageIgnored
-            }
-            RoundDataVoteAcceptResult::BroadcastConf(_) => unreachable!(),
-        }
-    }
-
-    fn process_aux_message<NT>(
-        &mut self,
-        message: StoredMessage<AsyncBinaryAgreementMessage>,
-        network: &NT,
-    ) -> AsyncBinaryAgreementResult
-    where
-        NT: AsyncBinaryAgreementSendNode,
-    {
-        let header = message.header();
-
-        let AsyncBinaryAgreementMessageType::Aux { accepted_estimates } =
-            message.message().message_type()
-        else {
-            unreachable!()
-        };
-
-        match self
-            .current_round
-            .accept_auxiliary(header.from(), accepted_estimates.clone())
-        {
-            RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed(message),
-            RoundDataVoteAcceptResult::Failed(next_estimate) => {
-                // If we are in a failed state, we ignore the message
-                self.advance_round(next_estimate);
-                AsyncBinaryAgreementResult::MessageIgnored
-            }
             RoundDataVoteAcceptResult::BroadcastConf(feasible_values) => {
-                // If we are collecting ready messages, we broadcast the confirmation
+                // If we are collecting echoes, we broadcast the estimate
                 let partial_signature = self.calculate_threshold_signature_for_round(self.round);
 
                 let conf_message = AsyncBinaryAgreementMessage::new(
@@ -196,45 +155,31 @@ impl AsyncBinaryAgreement {
 
                 AsyncBinaryAgreementResult::Processed(message)
             }
-            RoundDataVoteAcceptResult::Finalized => {
-                // If we are in a finalized state, we ignore the message
-                AsyncBinaryAgreementResult::Decided(message)
-            }
-            RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted => {
-                AsyncBinaryAgreementResult::MessageIgnored
+            RoundDataVoteAcceptResult::BroadcastFinalized(value) => {
+                // If we are collecting echoes, we broadcast the estimate
+                let finish_message = AsyncBinaryAgreementMessage::new(
+                    AsyncBinaryAgreementMessageType::Finish { value },
+                    self.round,
+                );
+
+                network
+                    .broadcast_message(
+                        finish_message,
+                        self.quorum_info.quorum_members().iter().cloned(),
+                    )
+                    .expect("Failed to broadcast finalized message");
+
+                AsyncBinaryAgreementResult::Processed(message)
             }
             RoundDataVoteAcceptResult::Queue => {
                 // If we are collecting echoes, we queue the message for later processing
                 self.pending_messages.add_message(self.round, message);
                 AsyncBinaryAgreementResult::MessageQueued
             }
-            RoundDataVoteAcceptResult::BroadcastEst(_)
-            | RoundDataVoteAcceptResult::BroadcastAux(_) => {
-                unreachable!()
+            RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted => {
+                AsyncBinaryAgreementResult::MessageIgnored
             }
         }
-    }
-
-    fn process_conf_message<NT>(
-        &mut self,
-        message: StoredMessage<AsyncBinaryAgreementMessage>,
-        network: &NT,
-    ) -> AsyncBinaryAgreementResult
-    where
-        NT: AsyncBinaryAgreementSendNode,
-    {
-        todo!();
-    }
-
-    fn process_finish_message<NT>(
-        &mut self,
-        message: StoredMessage<AsyncBinaryAgreementMessage>,
-        network: &NT,
-    ) -> AsyncBinaryAgreementResult
-    where
-        NT: AsyncBinaryAgreementSendNode,
-    {
-        todo!();
     }
 
     fn advance_round(&mut self, next_estimate: bool) {
@@ -242,12 +187,16 @@ impl AsyncBinaryAgreement {
 
         let new_round = RoundData::new(f, self.threshold_key.0.clone(), next_estimate);
         let old_round = std::mem::replace(&mut self.current_round, new_round);
+
         self.previous_rounds.push(old_round);
+
         self.round += 1;
     }
 
     fn calculate_threshold_signature_for_round(&self, round: usize) -> PartialSignature {
-        self.threshold_key.1.partially_sign(&round.to_le_bytes()[..])
+        self.threshold_key
+            .1
+            .partially_sign(&round.to_le_bytes()[..])
     }
 }
 
@@ -255,5 +204,5 @@ pub(super) enum AsyncBinaryAgreementResult {
     MessageQueued,
     MessageIgnored,
     Processed(StoredMessage<AsyncBinaryAgreementMessage>),
-    Decided(StoredMessage<AsyncBinaryAgreementMessage>),
+    Decided(bool, StoredMessage<AsyncBinaryAgreementMessage>),
 }
