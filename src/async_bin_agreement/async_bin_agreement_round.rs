@@ -58,7 +58,7 @@ impl RoundData {
             Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
 
-        if current_votes >= 2 * self.f + 1 {
+        if current_votes > 2 * self.f {
             self.values_r.insert(estimate);
 
             self.state = AsyncBinaryAgreementState::CollectingAux;
@@ -68,7 +68,7 @@ impl RoundData {
             );
         }
 
-        if current_votes >= self.f + 1 && self.val_data.broadcast_estimates.insert(estimate) {
+        if current_votes > self.f && self.val_data.broadcast_estimates.insert(estimate) {
             // Broadcast the estimate to all nodes
             return RoundDataVoteAcceptResult::BroadcastEst(estimate);
         }
@@ -105,7 +105,7 @@ impl RoundData {
 
         let accepted_estimates = accepted_estimates.into_iter().collect::<HashSet<_>>();
 
-        if vote_count >= 2 * self.f + 1
+        if vote_count > 2 * self.f
             && (self.values_r.is_superset(&accepted_estimates)
                 || self.values_r.eq(&accepted_estimates))
         {
@@ -151,7 +151,7 @@ impl RoundData {
             Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
 
-        if vote_count >= 2 * self.f + 1 {
+        if vote_count > 2 * self.f {
             let feasible_value_set = feasible_values.iter().cloned().collect::<HashSet<_>>();
 
             if self.values_r.is_superset(&feasible_value_set) || self.values_r == feasible_value_set
@@ -162,7 +162,7 @@ impl RoundData {
 
                 return self
                     .perform_coin_flip(&feasible_values, signatures)
-                    .unwrap_or_else(|_| RoundDataVoteAcceptResult::Failed(self.estimate));
+                    .unwrap_or(RoundDataVoteAcceptResult::Failed(self.estimate));
             }
         }
 
@@ -237,9 +237,9 @@ impl RoundData {
             Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
 
-        if vote_count >= 2 * self.f + 1 {
+        if vote_count > 2 * self.f {
             return RoundDataVoteAcceptResult::Finalized(final_value);
-        } else if vote_count >= self.f + 1
+        } else if vote_count > self.f
             && self.finish_round_data.try_register_broadcast(final_value)
         {
             return RoundDataVoteAcceptResult::BroadcastFinalized(final_value);
@@ -304,11 +304,11 @@ impl ConfRoundData {
     ) -> Result<usize, ()> {
         let entry = self.received_conf.entry(feasible_values).or_default();
 
-        if entry.contains_key(&sender) {
-            Err(())
-        } else {
-            entry.insert(sender, partial_signature);
+        if let std::collections::hash_map::Entry::Vacant(e) = entry.entry(sender) {
+            e.insert(partial_signature);
             Ok(entry.len())
+        } else {
+            Err(())
         }
     }
 
@@ -348,18 +348,15 @@ impl FinishRoundData {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Hash)]
+#[derive(Default)]
 pub(super) enum AsyncBinaryAgreementState {
+    #[default]
     CollectingVal,
     CollectingAux,
     CollectingConf,
     Finishing,
 }
 
-impl Default for AsyncBinaryAgreementState {
-    fn default() -> Self {
-        AsyncBinaryAgreementState::CollectingVal
-    }
-}
 
 /// Represents the result of accepting a vote in the round data.
 #[derive(Debug, Clone)]

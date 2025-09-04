@@ -62,8 +62,8 @@ where
 
     pub(super) fn has_pending(&self) -> bool {
         match self.reliable_broadcast_state {
-            ReliableBroadcastState::Proposed => self.pending_messages.echoes.len() > 0,
-            ReliableBroadcastState::Echoed => self.pending_messages.readies.len() > 0,
+            ReliableBroadcastState::Proposed => !self.pending_messages.echoes.is_empty(),
+            ReliableBroadcastState::Echoed => !self.pending_messages.readies.is_empty(),
             ReliableBroadcastState::Init | ReliableBroadcastState::Ready => false,
         }
     }
@@ -135,7 +135,7 @@ where
             {
                 self.message_tracking.handle_received_ready(header.from());
 
-                if self.message_tracking.received_readies().len() >= 2 * self.quorum_info.f() + 1
+                if self.message_tracking.received_readies().len() > 2 * self.quorum_info.f()
                     && !self.message_tracking.sent_ready()
                 {
                     self.reliable_broadcast_state = ReliableBroadcastState::Ready;
@@ -199,7 +199,7 @@ where
                 "Attempted to finalize reliable broadcast in an invalid state: {:?}",
                 self.reliable_broadcast_state
             );
-            return Err(ReliableBroadcastError::NotReadyToFinalize);
+            Err(ReliableBroadcastError::NotReadyToFinalize)
         }
     }
 }
