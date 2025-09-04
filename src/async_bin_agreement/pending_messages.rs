@@ -21,15 +21,37 @@ impl PendingMessages {
         round: usize,
         message: StoredMessage<AsyncBinaryAgreementMessage>,
     ) {
-        while self.per_round_messages.len() <= round {
+        if round < self.current_round_base {
+            // Ignore messages from rounds that have already been processed
+            return;
+        }
+        
+        let round_index = round - self.current_round_base;
+        
+        while self.per_round_messages.len() <= round_index {
             self.per_round_messages.push_back(Vec::new());
         }
-        if let Some(messages) = self.per_round_messages.get_mut(round) {
+
+        if let Some(messages) = self.per_round_messages.get_mut(round_index) {
             messages.push(message);
         }
     }
 
-    pub fn pop_message(&mut self) -> Option<StoredMessage<AsyncBinaryAgreementMessage>> {
+    pub fn pop_message(&mut self, round: usize) -> Option<StoredMessage<AsyncBinaryAgreementMessage>> {
+        // discard all older rounds until we reach the requested round
+        if round > self.current_round_base {
+            // Calculate how many rounds to skip
+            let rounds_to_skip = round - self.current_round_base;
+
+            // Remove all rounds up to (but not including) the requested round
+            self.per_round_messages.drain(0..rounds_to_skip)
+                .for_each(|_| ()); // Just drain, we don't need the values
+
+            // Update our base to the requested round
+            self.current_round_base = round;
+        }
+
+        // Now we're at the requested round, get a message if it exists
         self.per_round_messages.front_mut()?.pop()
     }
 }

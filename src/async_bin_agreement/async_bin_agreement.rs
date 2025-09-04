@@ -51,6 +51,10 @@ impl AsyncBinaryAgreement {
         }
     }
 
+    pub fn poll(&mut self) -> Option<StoredMessage<AsyncBinaryAgreementMessage>> {
+        self.pending_messages.pop_message(self.round)
+    }
+
     pub fn process_message<NT>(
         &mut self,
         message: StoredMessage<AsyncBinaryAgreementMessage>,
@@ -184,7 +188,7 @@ impl AsyncBinaryAgreement {
         }
     }
 
-    fn advance_round(&mut self, next_estimate: bool) {
+    pub(super) fn advance_round(&mut self, next_estimate: bool) {
         let f = self.quorum_info.f();
 
         let new_round = RoundData::new(f, self.threshold_key.0.clone(), next_estimate);

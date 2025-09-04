@@ -17,7 +17,7 @@ use std::collections::HashSet;
 use crate::aba::AsyncBinaryAgreementSendNode;
 
 #[derive(Default)]
-struct MockNetwork {
+pub(super) struct MockNetwork {
     sent: RefCell<Vec<(AsyncBinaryAgreementMessage, Vec<NodeId>)>>,
 }
 
@@ -35,7 +35,7 @@ impl AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage> for MockNetwork {
         Ok(())
     }
 }
-fn stored_msg<T>(from: NodeId, to: NodeId, msg: T) -> StoredMessage<T> {
+pub(super) fn stored_msg<T>(from: NodeId, to: NodeId, msg: T) -> StoredMessage<T> {
     let wire_msg = atlas_communication::message::WireMessage::new(
         from,
         to,
@@ -49,7 +49,7 @@ fn stored_msg<T>(from: NodeId, to: NodeId, msg: T) -> StoredMessage<T> {
     StoredMessage::new(wire_msg.header().clone(), msg)
 }
 
-fn quorum_info(n: usize, f: usize) -> QuorumInfo {
+pub(super) fn quorum_info(n: usize, f: usize) -> QuorumInfo {
     QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect())
 }
 
@@ -57,18 +57,18 @@ const N: usize = 4;
 const F: usize = 1;
 
 #[derive(Getters, MutGetters)]
-struct TestData {
-    node_id: NodeId,
+pub(super) struct TestData {
+    pub(super) node_id: NodeId,
     #[get = "pub"]
-    network: MockNetwork,
+    pub(super) network: MockNetwork,
     #[get = "pub"]
-    key_set: PrivateKeySet,
+    pub(super) key_set: PrivateKeySet,
     #[get_mut = "pub"]
-    aba: AsyncBinaryAgreement,
+    pub(super) aba: AsyncBinaryAgreement,
 }
 
 impl TestData {
-    fn new(id: NodeId, n: usize, f: usize, initial_estimate: bool) -> Self {
+    pub(super) fn new(id: NodeId, n: usize, f: usize, initial_estimate: bool) -> Self {
         let qi = quorum_info(n, f);
         let key_set = PrivateKeySet::gen_random(f);
         let pk_set = key_set.public_key_set();
@@ -88,11 +88,15 @@ impl TestData {
         }
     }
 
-    fn get_private_key_part(&self, index: usize) -> PrivateKeyPart {
+    pub(super) fn get_private_key_part(&self, index: usize) -> PrivateKeyPart {
         self.key_set.private_key_part(index)
     }
+    
+    pub(super) fn advance_round(&mut self, estimate: bool) {
+        self.aba.advance_round(estimate);
+    }
 
-    fn accept_message(
+    pub(super) fn accept_message(
         &mut self,
         from: NodeId,
         msg: AsyncBinaryAgreementMessage,
@@ -132,14 +136,14 @@ fn test_val_round_first_stage() {
     assert!(test_data.network().sent.borrow().iter().any(|(message, _)| matches!(message.message_type(), AsyncBinaryAgreementMessageType::Val { estimate } if *estimate == INITIAL_ESTIMATE)));
 }
 
-fn get_val_message(estimate: bool, round: Option<usize>) -> AsyncBinaryAgreementMessage {
+pub(super) fn get_val_message(estimate: bool, round: Option<usize>) -> AsyncBinaryAgreementMessage {
     AsyncBinaryAgreementMessage::new(
         AsyncBinaryAgreementMessageType::Val { estimate },
         round.unwrap_or(0),
     )
 }
 
-fn perform_full_val_round(test_data: &mut TestData, test_message: AsyncBinaryAgreementMessage) {
+pub(super) fn perform_full_val_round(test_data: &mut TestData, test_message: AsyncBinaryAgreementMessage) {
     for replica in 0..(2 * F + 1) {
         let result = test_data.accept_message(NodeId::from(replica), test_message.clone());
 
@@ -179,7 +183,7 @@ fn test_val_round_ignored() {
     assert_eq!(2, test_data.network().sent.borrow().len());
 }
 
-fn get_aux_message(
+pub(crate) fn get_aux_message(
     accepted_estimates: Vec<bool>,
     round: Option<usize>,
 ) -> AsyncBinaryAgreementMessage {
@@ -189,7 +193,7 @@ fn get_aux_message(
     )
 }
 
-fn perform_full_aux_round(test_data: &mut TestData, test_message: AsyncBinaryAgreementMessage) {
+pub(super) fn perform_full_aux_round(test_data: &mut TestData, test_message: AsyncBinaryAgreementMessage) {
     for replica in 0..(2 * F + 1) {
         let result = test_data.accept_message(NodeId::from(replica), test_message.clone());
 
@@ -225,7 +229,7 @@ fn test_aux_round() {
     ));
 }
 
-fn get_conf_message(
+pub(super) fn get_conf_message(
     feasible_values: Vec<bool>,
     signature_set: &PrivateKeySet,
     node: NodeId,
@@ -244,7 +248,7 @@ fn get_conf_message(
     )
 }
 
-fn perform_full_conf_round(test_data: &mut TestData, initial_estimate: bool, round: Option<usize>) {
+pub(super) fn perform_full_conf_round(test_data: &mut TestData, initial_estimate: bool, round: Option<usize>) {
     for replica in 0..(2 * F + 1) {
         let conf_message = get_conf_message(
             vec![initial_estimate],
@@ -299,7 +303,7 @@ fn test_conf_round() {
     }
 }
 
-fn perform_all_rounds_until_conf_success(
+pub(super) fn perform_all_rounds_until_conf_success(
     test_data: &mut TestData,
     initial_estimate: bool,
 ) -> usize {
@@ -327,7 +331,7 @@ fn perform_all_rounds_until_conf_success(
     }
 }
 
-fn get_finish_message(final_value: bool, round: Option<usize>) -> AsyncBinaryAgreementMessage {
+pub(super) fn get_finish_message(final_value: bool, round: Option<usize>) -> AsyncBinaryAgreementMessage {
     AsyncBinaryAgreementMessage::new(
         AsyncBinaryAgreementMessageType::Finish { value: final_value },
         round.unwrap_or(0),

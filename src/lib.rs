@@ -21,6 +21,7 @@ mod async_bin_agreement {
     #[cfg(test)]
     pub mod test {
         pub mod async_bin_agreement_test;
+        pub mod message_handling_test;
     }
 }
 
