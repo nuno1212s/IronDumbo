@@ -2,7 +2,10 @@ use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult};
 use atlas_common::node_id::NodeId;
 
 // Import test utilities from the existing test file
-use super::async_bin_agreement_test::{get_aux_message, get_conf_message, get_val_message, perform_all_rounds_until_conf_success, TestData};
+use super::async_bin_agreement_test::{
+    TestData, get_aux_message, get_conf_message, get_val_message,
+    perform_all_rounds_until_conf_success,
+};
 
 const N: usize = 4;
 const F: usize = 1;
@@ -30,10 +33,17 @@ fn test_future_round_message_is_queued() {
 
     // Process any pending messages - the queued message should now be processed
     let pending = test_data.aba.poll();
-    assert!(pending.is_some(), "Expected a queued message, but found none");
+    assert!(
+        pending.is_some(),
+        "Expected a queued message, but found none"
+    );
 
     let pending_msg = pending.unwrap();
-    assert_eq!(1, pending_msg.message().round(), "Expected the queued message to be for round 1");
+    assert_eq!(
+        1,
+        pending_msg.message().round(),
+        "Expected the queued message to be for round 1"
+    );
 }
 
 /// Tests handling of a message from a past round, which should be ignored

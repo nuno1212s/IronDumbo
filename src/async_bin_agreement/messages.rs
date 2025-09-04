@@ -11,10 +11,7 @@ pub(super) struct AsyncBinaryAgreementMessage {
 }
 
 impl AsyncBinaryAgreementMessage {
-    pub(super) fn new(
-        message_type: AsyncBinaryAgreementMessageType,
-        round: usize,
-    ) -> Self {
+    pub(super) fn new(message_type: AsyncBinaryAgreementMessageType, round: usize) -> Self {
         Self {
             message_type,
             round,
@@ -28,8 +25,17 @@ impl AsyncBinaryAgreementMessage {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub(super) enum AsyncBinaryAgreementMessageType {
-    Val { estimate: bool },
-    Aux { accepted_estimates: Vec<bool> },
-    Conf { feasible_values: Vec<bool>, partial_signature: PartialSignature },
-    Finish { value : bool }
+    Val {
+        estimate: bool,
+    },
+    Aux {
+        accepted_estimates: Vec<bool>,
+    },
+    Conf {
+        feasible_values: Vec<bool>,
+        partial_signature: PartialSignature,
+    },
+    Finish {
+        value: bool,
+    },
 }

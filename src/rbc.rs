@@ -1,4 +1,1 @@
-
-pub trait ReliableBroadcast<T> {
-    
-}
+pub trait ReliableBroadcast<T> {}

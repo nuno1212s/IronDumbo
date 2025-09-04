@@ -104,8 +104,8 @@ fn stored_msg(
     StoredMessage::new(wire_msg.header().clone(), msg)
 }
 
-const N : usize = 4;
-const F : usize = 1;
+const N: usize = 4;
+const F: usize = 1;
 
 #[test]
 fn test_send_phase() {
@@ -214,7 +214,11 @@ fn test_not_enough_echoes_no_ready() {
     let digest = make_digest(1);
 
     // SEND
-    let send_msg = stored_msg(sender, sender, ReliableBroadcastMessage::Send(vec![], digest));
+    let send_msg = stored_msg(
+        sender,
+        sender,
+        ReliableBroadcastMessage::Send(vec![], digest),
+    );
     rbc.process_message(send_msg, &network);
 
     // Only 1 ECHO (less than n-f)
@@ -224,7 +228,9 @@ fn test_not_enough_echoes_no_ready() {
     // Should NOT broadcast READY
     let sent = network.sent.borrow();
     assert!(
-        !sent.iter().any(|(msg, _)| matches!(msg, ReliableBroadcastMessage::Ready(_))),
+        !sent
+            .iter()
+            .any(|(msg, _)| matches!(msg, ReliableBroadcastMessage::Ready(_))),
         "Should not broadcast READY with insufficient ECHOs"
     );
 }
@@ -238,7 +244,11 @@ fn test_duplicate_echoes_ignored() {
     let digest = make_digest(2);
 
     // SEND
-    let send_msg = stored_msg(sender, sender, ReliableBroadcastMessage::Send(vec![], digest));
+    let send_msg = stored_msg(
+        sender,
+        sender,
+        ReliableBroadcastMessage::Send(vec![], digest),
+    );
     rbc.process_message(send_msg, &network);
 
     // ECHO from node 1 twice
@@ -249,7 +259,9 @@ fn test_duplicate_echoes_ignored() {
     // Only one ECHO should be counted, so still not enough for READY
     let sent = network.sent.borrow();
     assert!(
-        !sent.iter().any(|(msg, _)| matches!(msg, ReliableBroadcastMessage::Ready(_))),
+        !sent
+            .iter()
+            .any(|(msg, _)| matches!(msg, ReliableBroadcastMessage::Ready(_))),
         "Duplicate ECHO should not trigger READY"
     );
 }
@@ -263,12 +275,20 @@ fn test_duplicate_readies_ignored() {
     let digest = make_digest(3);
 
     // SEND
-    let send_msg = stored_msg(sender, sender, ReliableBroadcastMessage::Send(vec![], digest));
+    let send_msg = stored_msg(
+        sender,
+        sender,
+        ReliableBroadcastMessage::Send(vec![], digest),
+    );
     rbc.process_message(send_msg, &network);
 
     // Enough ECHOs to trigger READY
     for i in 0..(quorum.quorum_size() - quorum.f()) {
-        let echo_msg = stored_msg(NodeId::from(i), sender, ReliableBroadcastMessage::Echo(digest));
+        let echo_msg = stored_msg(
+            NodeId::from(i),
+            sender,
+            ReliableBroadcastMessage::Echo(digest),
+        );
         rbc.process_message(echo_msg, &network);
     }
 
@@ -295,11 +315,19 @@ fn test_mismatched_digest_ignored() {
     let wrong_digest = make_digest(99);
 
     // SEND
-    let send_msg = stored_msg(sender, sender, ReliableBroadcastMessage::Send(vec![], digest));
+    let send_msg = stored_msg(
+        sender,
+        sender,
+        ReliableBroadcastMessage::Send(vec![], digest),
+    );
     rbc.process_message(send_msg, &network);
 
     // ECHO with wrong digest
-    let echo_msg = stored_msg(NodeId(1), sender, ReliableBroadcastMessage::Echo(wrong_digest));
+    let echo_msg = stored_msg(
+        NodeId(1),
+        sender,
+        ReliableBroadcastMessage::Echo(wrong_digest),
+    );
     let result = rbc.process_message(echo_msg, &network);
 
     // Should be queued/ignored
@@ -318,7 +346,11 @@ fn test_send_after_proposed_ignored() {
     let digest = make_digest(5);
 
     // First SEND
-    let send_msg = stored_msg(sender, sender, ReliableBroadcastMessage::Send(vec![], digest));
+    let send_msg = stored_msg(
+        sender,
+        sender,
+        ReliableBroadcastMessage::Send(vec![], digest),
+    );
     rbc.process_message(send_msg.clone(), &network);
 
     // Second SEND (should be ignored)

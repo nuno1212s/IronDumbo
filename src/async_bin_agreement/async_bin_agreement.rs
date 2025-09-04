@@ -1,3 +1,4 @@
+use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult, AsyncBinaryAgreementSendNode};
 use crate::async_bin_agreement::async_bin_agreement_round::{RoundData, RoundDataVoteAcceptResult};
 use crate::async_bin_agreement::messages::{
     AsyncBinaryAgreementMessage, AsyncBinaryAgreementMessageType,
@@ -7,7 +8,6 @@ use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
 use atlas_communication::message::StoredMessage;
 use getset::{CopyGetters, Getters};
-use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult, AsyncBinaryAgreementSendNode};
 
 /// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
 #[derive(Debug)]
@@ -78,16 +78,19 @@ impl ABAProtocol for AsyncBinaryAgreement {
         self.pending_messages.pop_message(self.round)
     }
 
-    fn process_message<NT>(&mut self, message: StoredMessage<Self::AsyncBinaryMessage>, network: &NT) -> AsyncBinaryAgreementResult
+    fn process_message<NT>(
+        &mut self,
+        message: StoredMessage<Self::AsyncBinaryMessage>,
+        network: &NT,
+    ) -> AsyncBinaryAgreementResult
     where
-        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>
+        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
     {
         let round = message.message().round();
 
         if round > self.round {
             // If the message is from a future round, we need to update our state
-            self.pending_messages
-                .add_message(round, message);
+            self.pending_messages.add_message(round, message);
 
             return AsyncBinaryAgreementResult::MessageQueued;
         } else if round < self.round {
@@ -105,12 +108,15 @@ impl ABAProtocol for AsyncBinaryAgreement {
             AsyncBinaryAgreementMessageType::Val { estimate } => {
                 self.current_round.accept_estimate(sender, estimate)
             }
-            AsyncBinaryAgreementMessageType::Aux { accepted_estimates } => {
-                self.current_round.accept_auxiliary(sender, accepted_estimates)
-            }
-            AsyncBinaryAgreementMessageType::Conf { feasible_values, partial_signature } => {
-                self.current_round.accept_confirmation(sender, feasible_values, partial_signature)
-            }
+            AsyncBinaryAgreementMessageType::Aux { accepted_estimates } => self
+                .current_round
+                .accept_auxiliary(sender, accepted_estimates),
+            AsyncBinaryAgreementMessageType::Conf {
+                feasible_values,
+                partial_signature,
+            } => self
+                .current_round
+                .accept_confirmation(sender, feasible_values, partial_signature),
             AsyncBinaryAgreementMessageType::Finish { value } => {
                 self.current_round.accept_finish(sender, value)
             }
@@ -206,4 +212,3 @@ impl ABAProtocol for AsyncBinaryAgreement {
         }
     }
 }
-
