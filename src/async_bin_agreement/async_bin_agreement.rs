@@ -2,12 +2,14 @@ use crate::async_bin_agreement::async_bin_agreement_round::{RoundData, RoundData
 use crate::async_bin_agreement::messages::{
     AsyncBinaryAgreementMessage, AsyncBinaryAgreementMessageType,
 };
-use crate::async_bin_agreement::network::AsyncBinaryAgreementSendNode;
 use crate::async_bin_agreement::pending_messages::PendingMessages;
 use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
 use atlas_communication::message::StoredMessage;
-use getset::Getters;
+use getset::{CopyGetters, Getters};
+use crate::aba::{AsyncBinaryAgreementSendNode};
+
+pub(super) type AsyncBinaryAgreementResult = crate::aba::AsyncBinaryAgreementResult<AsyncBinaryAgreementMessage>;
 
 /// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
 #[derive(Debug)]
@@ -16,8 +18,9 @@ pub(super) struct ThresholdKeys(PublicKeySet, PrivateKeyPart);
 /// Represents the state of an asynchronous binary agreement protocol.
 /// It contains the current round, the input bit, the quorum information,
 /// the current round data, the previous rounds, and the pending messages.
-#[derive(Debug, Getters)]
+#[derive(Debug, Getters, CopyGetters)]
 pub(super) struct AsyncBinaryAgreement {
+    #[get_copy = "pub"]
     round: usize,
     input_bit: bool,
     quorum_info: QuorumInfo,
@@ -54,9 +57,9 @@ impl AsyncBinaryAgreement {
         network: &NT,
     ) -> AsyncBinaryAgreementResult
     where
-        NT: AsyncBinaryAgreementSendNode,
+        NT: AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage>,
     {
-        
+
         let round = message.message().round();
 
         if round > self.round {
@@ -69,13 +72,13 @@ impl AsyncBinaryAgreement {
             // If the message is from a past round, we can ignore it
             return AsyncBinaryAgreementResult::MessageIgnored;
         }
-        
+
         let (header, async_bin_message) = message.clone().into_inner();
 
         let (_, message_type) = async_bin_message.into_inner();
-        
+
         let sender = header.from();
-        
+
         let result = match message_type {
             AsyncBinaryAgreementMessageType::Val { estimate } => {
                 self.current_round.accept_estimate(sender, estimate)
@@ -94,12 +97,11 @@ impl AsyncBinaryAgreement {
         match result {
             RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed(message),
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
-                // If we are in a failed state, we ignore the message
+                // If we are in a failed state, we move to the next round
                 self.advance_round(next_estimate);
-                AsyncBinaryAgreementResult::MessageIgnored
+                AsyncBinaryAgreementResult::Processed(message)
             }
             RoundDataVoteAcceptResult::Finalized(result) => {
-                // If we are in a finalized state, we ignore the message
                 AsyncBinaryAgreementResult::Decided(result, message)
             }
             RoundDataVoteAcceptResult::BroadcastEst(estimate) => {
@@ -200,9 +202,3 @@ impl AsyncBinaryAgreement {
     }
 }
 
-pub(super) enum AsyncBinaryAgreementResult {
-    MessageQueued,
-    MessageIgnored,
-    Processed(StoredMessage<AsyncBinaryAgreementMessage>),
-    Decided(bool, StoredMessage<AsyncBinaryAgreementMessage>),
-}

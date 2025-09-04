@@ -1,26 +1,27 @@
 use crate::async_bin_agreement::async_bin_agreement::{
     AsyncBinaryAgreement, AsyncBinaryAgreementResult,
 };
+use crate::async_bin_agreement::async_bin_agreement_round::AsyncBinaryAgreementState;
 use crate::async_bin_agreement::messages::{
     AsyncBinaryAgreementMessage, AsyncBinaryAgreementMessageType,
 };
-use crate::async_bin_agreement::network::AsyncBinaryAgreementSendNode;
 use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::hash::Digest;
-use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PrivateKeySet, PublicKeySet};
+use atlas_common::crypto::threshold_crypto::{PrivateKeyPart, PrivateKeySet};
 use atlas_common::node_id::NodeId;
 use atlas_communication::lookup_table::MessageModule;
 use atlas_communication::message::{Buf, StoredMessage};
 use getset::{Getters, MutGetters};
 use std::cell::RefCell;
-use crate::async_bin_agreement::async_bin_agreement_round::AsyncBinaryAgreementState;
+use std::collections::HashSet;
+use crate::aba::AsyncBinaryAgreementSendNode;
 
 #[derive(Default)]
 struct MockNetwork {
     sent: RefCell<Vec<(AsyncBinaryAgreementMessage, Vec<NodeId>)>>,
 }
 
-impl AsyncBinaryAgreementSendNode for MockNetwork {
+impl AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage> for MockNetwork {
     fn broadcast_message<I>(
         &self,
         message: AsyncBinaryAgreementMessage,
@@ -61,11 +62,7 @@ struct TestData {
     #[get = "pub"]
     network: MockNetwork,
     #[get = "pub"]
-    qi: QuorumInfo,
-    #[get = "pub"]
     key_set: PrivateKeySet,
-    #[get = "pub"]
-    pk_set: PublicKeySet,
     #[get_mut = "pub"]
     aba: AsyncBinaryAgreement,
 }
@@ -86,9 +83,7 @@ impl TestData {
         Self {
             node_id: id,
             network: MockNetwork::default(),
-            qi,
             key_set,
-            pk_set,
             aba,
         }
     }
@@ -167,7 +162,6 @@ fn test_val_round_second_stage() {
     assert!(test_data.network().sent.borrow().iter().any(|(message, _)| matches!(message.message_type(), AsyncBinaryAgreementMessageType::Aux { accepted_estimates } if accepted_estimates.len() == 1 && accepted_estimates.contains(&INITIAL_ESTIMATE))));
 }
 
-
 #[test]
 fn test_val_round_ignored() {
     const INITIAL_ESTIMATE: bool = true;
@@ -185,7 +179,10 @@ fn test_val_round_ignored() {
     assert_eq!(2, test_data.network().sent.borrow().len());
 }
 
-fn get_aux_message(accepted_estimates: Vec<bool>, round: Option<usize>) -> AsyncBinaryAgreementMessage {
+fn get_aux_message(
+    accepted_estimates: Vec<bool>,
+    round: Option<usize>,
+) -> AsyncBinaryAgreementMessage {
     AsyncBinaryAgreementMessage::new(
         AsyncBinaryAgreementMessageType::Aux { accepted_estimates },
         round.unwrap_or(0),
@@ -222,39 +219,185 @@ fn test_aux_round() {
     assert_eq!(3, test_data.network().sent.borrow().len());
 
     assert!(test_data.network().sent.borrow().iter().any(|(message, _)| matches!(message.message_type(), AsyncBinaryAgreementMessageType::Aux { accepted_estimates } if accepted_estimates.len() == 1 && accepted_estimates.contains(&INITIAL_ESTIMATE))));
-    assert!(matches!(test_data.aba.current_round().state(),AsyncBinaryAgreementState::CollectingConf { .. } ));
+    assert!(matches!(
+        test_data.aba.current_round().state(),
+        AsyncBinaryAgreementState::CollectingConf { .. }
+    ));
 }
 
-fn get_conf_message(feasible_values: Vec<bool>, signature_set: &PrivateKeySet, node: NodeId, round: Option<usize>) -> AsyncBinaryAgreementMessage {
+fn get_conf_message(
+    feasible_values: Vec<bool>,
+    signature_set: &PrivateKeySet,
+    node: NodeId,
+    round: Option<usize>,
+) -> AsyncBinaryAgreementMessage {
     let signature = signature_set
         .private_key_part(node.0 as usize)
         .partially_sign(&round.unwrap_or(0).to_le_bytes()[..]);
 
     AsyncBinaryAgreementMessage::new(
-        AsyncBinaryAgreementMessageType::Conf { feasible_values, partial_signature: signature },
+        AsyncBinaryAgreementMessageType::Conf {
+            feasible_values,
+            partial_signature: signature,
+        },
         round.unwrap_or(0),
     )
+}
+
+fn perform_full_conf_round(test_data: &mut TestData, initial_estimate: bool, round: Option<usize>) {
+    for replica in 0..(2 * F + 1) {
+        let conf_message = get_conf_message(
+            vec![initial_estimate],
+            &test_data.key_set,
+            NodeId::from(replica),
+            round,
+        );
+
+        let result = test_data.accept_message(NodeId::from(replica), conf_message);
+
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+    }
 }
 
 #[test]
 fn test_conf_round() {
     const INITIAL_ESTIMATE: bool = true;
 
+    let mut achieved_results = HashSet::<AsyncBinaryAgreementState>::default();
+
+    while achieved_results.len() < 2 {
+        let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+
+        let val_message = get_val_message(INITIAL_ESTIMATE, None);
+
+        perform_full_val_round(&mut test_data, val_message);
+
+        let aux_message = get_aux_message(vec![INITIAL_ESTIMATE], None);
+
+        perform_full_aux_round(&mut test_data, aux_message);
+
+        perform_full_conf_round(&mut test_data, INITIAL_ESTIMATE, None);
+
+        assert!(
+            matches!(
+                test_data.aba.current_round().state(),
+                AsyncBinaryAgreementState::Finishing {}
+            ) || matches!(
+                test_data.aba.current_round().state(),
+                AsyncBinaryAgreementState::CollectingVal { .. }
+            )
+        );
+
+        if matches!(
+            test_data.aba.current_round().state(),
+            AsyncBinaryAgreementState::CollectingVal { .. }
+        ) {
+            assert_eq!(1, test_data.aba.round())
+        }
+
+        achieved_results.insert(test_data.aba.current_round().state().clone());
+    }
+}
+
+fn perform_all_rounds_until_conf_success(
+    test_data: &mut TestData,
+    initial_estimate: bool,
+) -> usize {
+    let mut round = 0;
+
+    loop {
+        let val_message = get_val_message(initial_estimate, Some(round));
+
+        perform_full_val_round(test_data, val_message);
+
+        let aux_message = get_aux_message(vec![initial_estimate], Some(round));
+
+        perform_full_aux_round(test_data, aux_message);
+
+        perform_full_conf_round(test_data, initial_estimate, Some(round));
+
+        if matches!(
+            test_data.aba.current_round().state(),
+            AsyncBinaryAgreementState::Finishing {}
+        ) {
+            break round;
+        }
+
+        round += 1;
+    }
+}
+
+fn get_finish_message(final_value: bool, round: Option<usize>) -> AsyncBinaryAgreementMessage {
+    AsyncBinaryAgreementMessage::new(
+        AsyncBinaryAgreementMessageType::Finish { value: final_value },
+        round.unwrap_or(0),
+    )
+}
+
+#[test]
+fn test_finish_round_f_1() {
+    const INITIAL_ESTIMATE: bool = true;
+
     let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
 
-    let val_message = get_val_message(INITIAL_ESTIMATE, None);
+    perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
+}
 
-    perform_full_val_round(&mut test_data, val_message);
+#[test]
+fn test_finish_round_f_plus_1_broadcast() {
+    const INITIAL_ESTIMATE: bool = true;
 
-    let aux_message = get_aux_message(vec![INITIAL_ESTIMATE], None);
+    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    // First, we need to bring the protocol to the Finishing state
+    let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
 
-    perform_full_aux_round(&mut test_data, aux_message);
+    // Record the current number of sent messages
+    let sent_messages_before = test_data.network().sent.borrow().len();
 
-    for replica in 0..(2 * F + 1) {
-        let conf_message = get_conf_message(vec![INITIAL_ESTIMATE], &test_data.key_set, NodeId::from(replica), None);
-        let result = test_data.accept_message(NodeId::from(replica), conf_message);
-
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+    // Send F finish messages with the agreed value
+    for i in 1..=F {
+        let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
+        let result = test_data.accept_message(NodeId::from(i), finish_message);
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
     }
 
+    // No broadcast should have happened yet
+    assert_eq!(
+        sent_messages_before,
+        test_data.network().sent.borrow().len()
+    );
+
+    // Send one more message (F+1), which should trigger a broadcast
+    let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
+    let result = test_data.accept_message(NodeId::from(F + 1), finish_message);
+    assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+
+    // Verify the broadcast was a Finish message
+    assert!(test_data.network().sent.borrow().iter().any(|(message, _)|
+        matches!(message.message_type(), AsyncBinaryAgreementMessageType::Finish { value } if *value == INITIAL_ESTIMATE)));
+}
+
+#[test]
+fn test_finish_round_2f_plus_1_finalization() {
+    const INITIAL_ESTIMATE: bool = true;
+
+    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    // First, we need to bring the protocol to the Finishing state
+    let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
+
+    // Send 2F + 1 finish messages with the agreed value
+    for i in 0..(2 * F + 1) {
+        let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
+        let result = test_data.accept_message(NodeId::from(i), finish_message);
+
+        // All messages except possibly the last should be processed
+        if i < 2 * F {
+            assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+        } else {
+            // The final message should result in finalization
+            assert!(
+                matches!(result, AsyncBinaryAgreementResult::Decided(value, ..) if value == INITIAL_ESTIMATE)
+            );
+        }
+    }
 }

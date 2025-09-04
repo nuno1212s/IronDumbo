@@ -40,7 +40,11 @@ impl RoundData {
         }
     }
 
-    pub(super) fn accept_estimate(&mut self, sender: NodeId, estimate: bool) -> RoundDataVoteAcceptResult {
+    pub(super) fn accept_estimate(
+        &mut self,
+        sender: NodeId,
+        estimate: bool,
+    ) -> RoundDataVoteAcceptResult {
         match self.state {
             AsyncBinaryAgreementState::CollectingVal => self.insert_estimate(sender, estimate),
             // If we are collecting ready messages, we ignore the estimate as we already completed it
@@ -51,7 +55,7 @@ impl RoundData {
     fn insert_estimate(&mut self, sender: NodeId, estimate: bool) -> RoundDataVoteAcceptResult {
         let current_votes = match self.val_data.insert_estimate(sender, estimate) {
             Ok(current_votes) => current_votes,
-            Err(_) =>return RoundDataVoteAcceptResult::AlreadyAccepted
+            Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
 
         if current_votes >= 2 * self.f + 1 {
@@ -64,9 +68,7 @@ impl RoundData {
             );
         }
 
-        if current_votes >= self.f + 1
-            && self.val_data.broadcast_estimates.insert(estimate)
-        {
+        if current_votes >= self.f + 1 && self.val_data.broadcast_estimates.insert(estimate) {
             // Broadcast the estimate to all nodes
             return RoundDataVoteAcceptResult::BroadcastEst(estimate);
         }
@@ -74,7 +76,7 @@ impl RoundData {
         RoundDataVoteAcceptResult::Accepted
     }
 
-    pub(super)fn accept_auxiliary(
+    pub(super) fn accept_auxiliary(
         &mut self,
         sender: NodeId,
         accepted_estimates: Vec<bool>,
@@ -93,8 +95,10 @@ impl RoundData {
         sender: NodeId,
         accepted_estimates: Vec<bool>,
     ) -> RoundDataVoteAcceptResult {
-
-        let vote_count = match self.aux_round_data.insert_aux(sender, accepted_estimates.clone()) {
+        let vote_count = match self
+            .aux_round_data
+            .insert_aux(sender, accepted_estimates.clone())
+        {
             Ok(votes) => votes,
             Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
@@ -138,7 +142,11 @@ impl RoundData {
         feasible_values: Vec<bool>,
         partial_signature: PartialSignature,
     ) -> RoundDataVoteAcceptResult {
-        let vote_count = match self.conf_round_data.insert_confirmation(sender, feasible_values.clone(), partial_signature) {
+        let vote_count = match self.conf_round_data.insert_confirmation(
+            sender,
+            feasible_values.clone(),
+            partial_signature,
+        ) {
             Ok(votes) => votes,
             Err(_) => return RoundDataVoteAcceptResult::AlreadyAccepted,
         };
@@ -146,9 +154,15 @@ impl RoundData {
         if vote_count >= 2 * self.f + 1 {
             let feasible_value_set = feasible_values.iter().cloned().collect::<HashSet<_>>();
 
-            if self.values_r.is_superset(&feasible_value_set)
-                || self.values_r == feasible_value_set {
-                todo!()
+            if self.values_r.is_superset(&feasible_value_set) || self.values_r == feasible_value_set
+            {
+                let signatures = self
+                    .conf_round_data
+                    .get_signatures_for_values(&feasible_values);
+
+                return self
+                    .perform_coin_flip(&feasible_values, signatures)
+                    .unwrap_or_else(|_| RoundDataVoteAcceptResult::Failed(self.estimate));
             }
         }
 
@@ -157,7 +171,7 @@ impl RoundData {
 
     fn perform_coin_flip(
         &mut self,
-        winning_set: Vec<bool>,
+        winning_set: &Vec<bool>,
         partial_signature: Vec<(NodeId, PartialSignature)>,
     ) -> Result<RoundDataVoteAcceptResult, CombineSignatureError> {
         let signatures = partial_signature
@@ -192,9 +206,11 @@ impl RoundData {
             self.state = AsyncBinaryAgreementState::Finishing;
             self.estimate = coin_flip_result;
 
-            self.finish_round_data.try_register_broadcast(self.estimate);
-
-            Ok(RoundDataVoteAcceptResult::BroadcastFinalized(self.estimate))
+            if self.finish_round_data.try_register_broadcast(self.estimate) {
+                Ok(RoundDataVoteAcceptResult::BroadcastFinalized(self.estimate))
+            } else {
+                Ok(RoundDataVoteAcceptResult::Accepted)
+            }
         } else {
             // If the winning set is not the same as the coin flip result, we ignore it
             // And move to the next round with the same estimate (as we have all agreed on it)
@@ -202,12 +218,16 @@ impl RoundData {
         }
     }
 
-    pub(super) fn accept_finish(&mut self, sender: NodeId, final_value: bool) -> RoundDataVoteAcceptResult {
+    pub(super) fn accept_finish(
+        &mut self,
+        sender: NodeId,
+        final_value: bool,
+    ) -> RoundDataVoteAcceptResult {
         match self.state {
             AsyncBinaryAgreementState::Finishing => self.insert_finish(sender, final_value),
-            AsyncBinaryAgreementState::CollectingAux | AsyncBinaryAgreementState::CollectingVal | AsyncBinaryAgreementState::CollectingConf => {
-                RoundDataVoteAcceptResult::Queue
-            }
+            AsyncBinaryAgreementState::CollectingAux
+            | AsyncBinaryAgreementState::CollectingVal
+            | AsyncBinaryAgreementState::CollectingConf => RoundDataVoteAcceptResult::Queue,
         }
     }
 
@@ -219,7 +239,9 @@ impl RoundData {
 
         if vote_count >= 2 * self.f + 1 {
             return RoundDataVoteAcceptResult::Finalized(final_value);
-        } else if vote_count >= self.f + 1 && self.finish_round_data.try_register_broadcast(final_value) {
+        } else if vote_count >= self.f + 1
+            && self.finish_round_data.try_register_broadcast(final_value)
+        {
             return RoundDataVoteAcceptResult::BroadcastFinalized(final_value);
         }
 
@@ -274,7 +296,6 @@ struct ConfRoundData {
 }
 
 impl ConfRoundData {
-
     fn insert_confirmation(
         &mut self,
         sender: NodeId,
@@ -293,7 +314,10 @@ impl ConfRoundData {
 
     fn get_signatures_for_values(&self, values: &Vec<bool>) -> Vec<(NodeId, PartialSignature)> {
         if let Some(signatures) = self.received_conf.get(values) {
-            signatures.iter().map(|(node, sig)| (*node, sig.clone())).collect()
+            signatures
+                .iter()
+                .map(|(node, sig)| (*node, sig.clone()))
+                .collect()
         } else {
             vec![]
         }
@@ -323,7 +347,7 @@ impl FinishRoundData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
 pub(super) enum AsyncBinaryAgreementState {
     CollectingVal,
     CollectingAux,
