@@ -7,9 +7,7 @@ use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
 use atlas_communication::message::StoredMessage;
 use getset::{CopyGetters, Getters};
-use crate::aba::{AsyncBinaryAgreementSendNode};
-
-pub(super) type AsyncBinaryAgreementResult = crate::aba::AsyncBinaryAgreementResult<AsyncBinaryAgreementMessage>;
+use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult, AsyncBinaryAgreementSendNode};
 
 /// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
 #[derive(Debug)]
@@ -51,19 +49,39 @@ impl AsyncBinaryAgreement {
         }
     }
 
-    pub fn poll(&mut self) -> Option<StoredMessage<AsyncBinaryAgreementMessage>> {
+    pub(super) fn advance_round(&mut self, next_estimate: bool) {
+        let f = self.quorum_info.f();
+
+        let new_round = RoundData::new(f, self.threshold_key.0.clone(), next_estimate);
+        let old_round = std::mem::replace(&mut self.current_round, new_round);
+
+        self.previous_rounds.push(old_round);
+
+        self.round += 1;
+    }
+
+    fn calculate_threshold_signature_for_round(&self, round: usize) -> PartialSignature {
+        self.threshold_key
+            .1
+            .partially_sign(&round.to_le_bytes()[..])
+    }
+}
+
+impl ABAProtocol for AsyncBinaryAgreement {
+    type AsyncBinaryMessage = AsyncBinaryAgreementMessage;
+
+    fn new(input_bit: bool) -> Self {
+        unimplemented!("Use the new function with quorum info and threshold keys")
+    }
+
+    fn poll(&mut self) -> Option<StoredMessage<Self::AsyncBinaryMessage>> {
         self.pending_messages.pop_message(self.round)
     }
 
-    pub fn process_message<NT>(
-        &mut self,
-        message: StoredMessage<AsyncBinaryAgreementMessage>,
-        network: &NT,
-    ) -> AsyncBinaryAgreementResult
+    fn process_message<NT>(&mut self, message: StoredMessage<Self::AsyncBinaryMessage>, network: &NT) -> AsyncBinaryAgreementResult
     where
-        NT: AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage>,
+        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>
     {
-
         let round = message.message().round();
 
         if round > self.round {
@@ -99,14 +117,14 @@ impl AsyncBinaryAgreement {
         };
 
         match result {
-            RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed(message),
+            RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed,
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
                 // If we are in a failed state, we move to the next round
                 self.advance_round(next_estimate);
-                AsyncBinaryAgreementResult::Processed(message)
+                AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::Finalized(result) => {
-                AsyncBinaryAgreementResult::Decided(result, message)
+                AsyncBinaryAgreementResult::Decided(result)
             }
             RoundDataVoteAcceptResult::BroadcastEst(estimate) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -122,7 +140,7 @@ impl AsyncBinaryAgreement {
                     )
                     .expect("Failed to broadcast estimate message");
 
-                AsyncBinaryAgreementResult::Processed(message)
+                AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::BroadcastAux(accepted_estimates) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -138,7 +156,7 @@ impl AsyncBinaryAgreement {
                     )
                     .expect("Failed to broadcast estimate message");
 
-                AsyncBinaryAgreementResult::Processed(message)
+                AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::BroadcastConf(feasible_values) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -159,7 +177,7 @@ impl AsyncBinaryAgreement {
                     )
                     .expect("Failed to broadcast confirmation message");
 
-                AsyncBinaryAgreementResult::Processed(message)
+                AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::BroadcastFinalized(value) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -175,7 +193,7 @@ impl AsyncBinaryAgreement {
                     )
                     .expect("Failed to broadcast finalized message");
 
-                AsyncBinaryAgreementResult::Processed(message)
+                AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::Queue => {
                 // If we are collecting echoes, we queue the message for later processing
@@ -186,23 +204,6 @@ impl AsyncBinaryAgreement {
                 AsyncBinaryAgreementResult::MessageIgnored
             }
         }
-    }
-
-    pub(super) fn advance_round(&mut self, next_estimate: bool) {
-        let f = self.quorum_info.f();
-
-        let new_round = RoundData::new(f, self.threshold_key.0.clone(), next_estimate);
-        let old_round = std::mem::replace(&mut self.current_round, new_round);
-
-        self.previous_rounds.push(old_round);
-
-        self.round += 1;
-    }
-
-    fn calculate_threshold_signature_for_round(&self, round: usize) -> PartialSignature {
-        self.threshold_key
-            .1
-            .partially_sign(&round.to_le_bytes()[..])
     }
 }
 

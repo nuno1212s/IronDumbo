@@ -1,5 +1,5 @@
 use crate::async_bin_agreement::async_bin_agreement::{
-    AsyncBinaryAgreement, AsyncBinaryAgreementResult,
+    AsyncBinaryAgreement,
 };
 use crate::async_bin_agreement::async_bin_agreement_round::AsyncBinaryAgreementState;
 use crate::async_bin_agreement::messages::{
@@ -14,7 +14,7 @@ use atlas_communication::message::{Buf, StoredMessage};
 use getset::{Getters, MutGetters};
 use std::cell::RefCell;
 use std::collections::HashSet;
-use crate::aba::AsyncBinaryAgreementSendNode;
+use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult, AsyncBinaryAgreementSendNode};
 
 #[derive(Default)]
 pub(super) struct MockNetwork {
@@ -124,13 +124,13 @@ fn test_val_round_first_stage() {
     for i in 1..=F {
         let result = test_data.accept_message(NodeId::from(i), test_message.clone());
 
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed))
     }
 
     // Send one more message, this should trigger a val broadcast
     let result = test_data.accept_message(NodeId::from(F + 1), test_message.clone());
 
-    assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+    assert!(matches!(result, AsyncBinaryAgreementResult::Processed));
     assert_eq!(1, test_data.network().sent.borrow().len());
 
     assert!(test_data.network().sent.borrow().iter().any(|(message, _)| matches!(message.message_type(), AsyncBinaryAgreementMessageType::Val { estimate } if *estimate == INITIAL_ESTIMATE)));
@@ -147,7 +147,7 @@ pub(super) fn perform_full_val_round(test_data: &mut TestData, test_message: Asy
     for replica in 0..(2 * F + 1) {
         let result = test_data.accept_message(NodeId::from(replica), test_message.clone());
 
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed))
     }
 }
 
@@ -197,7 +197,7 @@ pub(super) fn perform_full_aux_round(test_data: &mut TestData, test_message: Asy
     for replica in 0..(2 * F + 1) {
         let result = test_data.accept_message(NodeId::from(replica), test_message.clone());
 
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed))
     }
 }
 
@@ -259,7 +259,7 @@ pub(super) fn perform_full_conf_round(test_data: &mut TestData, initial_estimate
 
         let result = test_data.accept_message(NodeId::from(replica), conf_message);
 
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)))
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed))
     }
 }
 
@@ -362,7 +362,7 @@ fn test_finish_round_f_plus_1_broadcast() {
     for i in 1..=F {
         let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
         let result = test_data.accept_message(NodeId::from(i), finish_message);
-        assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+        assert!(matches!(result, AsyncBinaryAgreementResult::Processed));
     }
 
     // No broadcast should have happened yet
@@ -374,7 +374,7 @@ fn test_finish_round_f_plus_1_broadcast() {
     // Send one more message (F+1), which should trigger a broadcast
     let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
     let result = test_data.accept_message(NodeId::from(F + 1), finish_message);
-    assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+    assert!(matches!(result, AsyncBinaryAgreementResult::Processed));
 
     // Verify the broadcast was a Finish message
     assert!(test_data.network().sent.borrow().iter().any(|(message, _)|
@@ -396,7 +396,7 @@ fn test_finish_round_2f_plus_1_finalization() {
 
         // All messages except possibly the last should be processed
         if i < 2 * F {
-            assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+            assert!(matches!(result, AsyncBinaryAgreementResult::Processed));
         } else {
             // The final message should result in finalization
             assert!(

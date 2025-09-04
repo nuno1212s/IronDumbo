@@ -1,53 +1,8 @@
-use crate::aba::AsyncBinaryAgreementSendNode;
-use crate::async_bin_agreement::async_bin_agreement::AsyncBinaryAgreementResult;
-use crate::async_bin_agreement::messages::AsyncBinaryAgreementMessage;
-use crate::quorum_info::quorum_info::QuorumInfo;
-use atlas_common::crypto::hash::Digest;
+use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult};
 use atlas_common::node_id::NodeId;
-use atlas_communication::lookup_table::MessageModule;
-use atlas_communication::message::{Buf, StoredMessage};
-use std::cell::RefCell;
 
 // Import test utilities from the existing test file
-use super::async_bin_agreement_test::{get_aux_message, get_conf_message, get_val_message, perform_all_rounds_until_conf_success, perform_full_aux_round, perform_full_val_round, TestData};
-
-#[derive(Default)]
-struct MockNetwork {
-    sent: RefCell<Vec<(AsyncBinaryAgreementMessage, Vec<NodeId>)>>,
-}
-
-impl AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage> for MockNetwork {
-    fn broadcast_message<I>(
-        &self,
-        message: AsyncBinaryAgreementMessage,
-        target: I,
-    ) -> atlas_common::error::Result<()>
-    where
-        I: Iterator<Item = NodeId>,
-    {
-        self.sent.borrow_mut().push((message, target.collect()));
-
-        Ok(())
-    }
-}
-
-fn stored_msg<T>(from: NodeId, to: NodeId, msg: T) -> StoredMessage<T> {
-    let wire_msg = atlas_communication::message::WireMessage::new(
-        from,
-        to,
-        MessageModule::Application,
-        Buf::new(),
-        0,
-        Some(Digest::blank()),
-        None,
-    );
-
-    StoredMessage::new(wire_msg.header().clone(), msg)
-}
-
-fn quorum_info(n: usize, f: usize) -> QuorumInfo {
-    QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect())
-}
+use super::async_bin_agreement_test::{get_aux_message, get_conf_message, get_val_message, perform_all_rounds_until_conf_success, TestData};
 
 const N: usize = 4;
 const F: usize = 1;
@@ -128,7 +83,7 @@ fn test_duplicate_messages_are_ignored() {
     let result = test_data.accept_message(NodeId(1), val_message.clone());
 
     // The message should be processed
-    assert!(matches!(result, AsyncBinaryAgreementResult::Processed(_)));
+    assert!(matches!(result, AsyncBinaryAgreementResult::Processed));
 
     // Send the same message again from the same node
     let result = test_data.accept_message(NodeId(1), val_message);
