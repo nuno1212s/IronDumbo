@@ -1,6 +1,5 @@
 mod reliable_broadcast {
     pub mod messages;
-    pub mod network;
     pub mod reliable_broadcast;
 
     #[cfg(test)]
@@ -27,3 +26,7 @@ mod async_bin_agreement {
 
 pub mod aba;
 pub mod rbc;
+
+pub mod dumbo1 {
+    pub mod protocol;
+}

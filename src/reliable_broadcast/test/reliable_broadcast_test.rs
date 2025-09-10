@@ -1,6 +1,6 @@
 use crate::quorum_info::quorum_info::QuorumInfo;
+use crate::rbc::ReliableBroadcastSendNode;
 use crate::reliable_broadcast::messages::ReliableBroadcastMessage;
-use crate::reliable_broadcast::network::ReliableBroadcastSendNode;
 use crate::reliable_broadcast::reliable_broadcast::{
     ReliableBroadcastInstance, ReliableBroadcastResult,
 };
@@ -29,25 +29,27 @@ type MsgType = u8;
 impl ReliableBroadcastSendNode<MsgType> for MockNetwork {
     fn send(
         &self,
-        _message: ReliableBroadcastMessage<MsgType>,
-        _target: NodeId,
-        _flush: bool,
+        message: ReliableBroadcastMessage<MsgType>,
+        target: NodeId,
+        flush: bool,
     ) -> atlas_common::error::Result<()> {
-        Ok(())
+        self.send_signed(message, target, flush)
     }
     fn send_signed(
         &self,
-        _message: ReliableBroadcastMessage<MsgType>,
-        _target: NodeId,
+        message: ReliableBroadcastMessage<MsgType>,
+        target: NodeId,
         _flush: bool,
     ) -> atlas_common::error::Result<()> {
+        let targets_vec: Vec<NodeId> = vec![target];
+        self.sent.borrow_mut().push((message, targets_vec));
         Ok(())
     }
     fn broadcast<I>(
         &self,
         message: ReliableBroadcastMessage<MsgType>,
         targets: I,
-    ) -> std::result::Result<(), Vec<NodeId>>
+    ) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
     {
@@ -57,12 +59,14 @@ impl ReliableBroadcastSendNode<MsgType> for MockNetwork {
     }
     fn broadcast_signed<I>(
         &self,
-        _message: ReliableBroadcastMessage<MsgType>,
-        _targets: I,
-    ) -> std::result::Result<(), Vec<NodeId>>
+        message: ReliableBroadcastMessage<MsgType>,
+        targets: I,
+    ) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
     {
+        let targets_vec: Vec<NodeId> = targets.collect();
+        self.sent.borrow_mut().push((message, targets_vec));
         Ok(())
     }
 }
@@ -157,6 +161,23 @@ fn test_echo_phase() {
     );
 }
 
+fn simulate_echo(
+    rbc: &mut ReliableBroadcastInstance<MsgType>,
+    quorum: &QuorumInfo,
+    sender: NodeId,
+    network: &Arc<MockNetwork>,
+    digest: Digest,
+) {
+    for i in 0..(quorum.quorum_size() - quorum.f()) {
+        let echo_msg = stored_msg(
+            NodeId::from(i),
+            sender,
+            ReliableBroadcastMessage::Echo(digest),
+        );
+        rbc.process_message(echo_msg, &network);
+    }
+}
+
 #[test]
 fn test_ready_phase_and_deliver() {
     let quorum = quorum_info(N, F);
@@ -174,14 +195,7 @@ fn test_ready_phase_and_deliver() {
     rbc.process_message(send_msg, &network);
 
     // Simulate ECHO from n-f nodes to trigger READY
-    for i in 0..(quorum.quorum_size() - quorum.f()) {
-        let echo_msg = stored_msg(
-            NodeId::from(i),
-            sender,
-            ReliableBroadcastMessage::Echo(digest),
-        );
-        rbc.process_message(echo_msg, &network);
-    }
+    simulate_echo(&mut rbc, &quorum, sender, &network, digest);
 
     // Simulate READY from 2f+1 nodes (3 nodes)
     let mut finalized = false;
@@ -283,14 +297,7 @@ fn test_duplicate_readies_ignored() {
     rbc.process_message(send_msg, &network);
 
     // Enough ECHOs to trigger READY
-    for i in 0..(quorum.quorum_size() - quorum.f()) {
-        let echo_msg = stored_msg(
-            NodeId::from(i),
-            sender,
-            ReliableBroadcastMessage::Echo(digest),
-        );
-        rbc.process_message(echo_msg, &network);
-    }
+    simulate_echo(&mut rbc, &quorum, sender, &network, digest);
 
     // READY from node 1 twice
     let ready_msg = stored_msg(NodeId(1), sender, ReliableBroadcastMessage::Ready(digest));

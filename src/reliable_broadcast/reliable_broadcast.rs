@@ -1,6 +1,6 @@
 use crate::quorum_info::quorum_info::QuorumInfo;
+use crate::rbc::ReliableBroadcastSendNode;
 use crate::reliable_broadcast::messages::ReliableBroadcastMessage;
-use crate::reliable_broadcast::network::ReliableBroadcastSendNode;
 use atlas_common::collections::HashSet;
 use atlas_common::crypto::hash::Digest;
 use atlas_common::node_id::NodeId;

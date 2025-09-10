@@ -239,8 +239,7 @@ impl RoundData {
 
         if vote_count > 2 * self.f {
             return RoundDataVoteAcceptResult::Finalized(final_value);
-        } else if vote_count > self.f
-            && self.finish_round_data.try_register_broadcast(final_value)
+        } else if vote_count > self.f && self.finish_round_data.try_register_broadcast(final_value)
         {
             return RoundDataVoteAcceptResult::BroadcastFinalized(final_value);
         }
@@ -347,8 +346,7 @@ impl FinishRoundData {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Eq, Hash)]
-#[derive(Default)]
+#[derive(Debug, Clone, PartialEq, Eq, Hash, Default)]
 pub(super) enum AsyncBinaryAgreementState {
     #[default]
     CollectingVal,
@@ -356,7 +354,6 @@ pub(super) enum AsyncBinaryAgreementState {
     CollectingConf,
     Finishing,
 }
-
 
 /// Represents the result of accepting a vote in the round data.
 #[derive(Debug, Clone)]
@@ -372,5 +369,3 @@ pub(super) enum RoundDataVoteAcceptResult {
     Failed(bool),
     Finalized(bool),
 }
-
-const VOTE_VALUES: [bool; 2] = [false, true];
