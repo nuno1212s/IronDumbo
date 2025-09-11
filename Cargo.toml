@@ -3,6 +3,11 @@ name = "iron-dumbo"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+serialize_serde = ["atlas-common/serialize_serde", "atlas-core/serialize_serde", "atlas-communication/serialize_serde"]
+
+default = ["serialize_serde"]
+
 [dependencies]
 
 atlas-common = { path = "../Atlas/Atlas-Common" }

@@ -26,7 +26,11 @@ mod async_bin_agreement {
 
 pub mod aba;
 pub mod rbc;
+mod rq_aggregator;
+mod committee_election;
 
 pub mod dumbo1 {
     pub mod protocol;
+    mod epoch;
+    mod message;
 }
