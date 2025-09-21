@@ -6,6 +6,13 @@ use atlas_common::collections::HashMap;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use std::fmt::Debug;
+use std::sync::Arc;
+use atlas_common::serialization_helper::SerMsg;
+use atlas_common::error::Result;
+use atlas_communication::message::StoredMessage;
+use atlas_core::ordering_protocol::ShareableConsensusMessage;
+use crate::dumbo1::message::DumboMessageType;
+use crate::dumbo1::protocol::{DumboPMessage, DumboPSerialization};
 
 pub(super) struct DumboRound<CE, RQ, R, A> {
     // The current epoch number.
@@ -18,6 +25,7 @@ pub(super) struct DumboRound<CE, RQ, R, A> {
 
 impl<CE, RQ, R, A> DumboRound<CE, RQ, R, A>
 where
+    RQ: SerMsg,
     R: ReliableBroadcast<RQ>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
@@ -34,7 +42,46 @@ where
         }
     }
 
-    
+    pub(super) fn process_message<NT>(
+        &mut self,
+        message: ShareableConsensusMessage<RQ, DumboPSerialization<RQ, R, A, CE>>,
+        network: &Arc<NT>
+    ) -> Result<EpochResult>{
+        match message.message().message_type() {
+            DumboMessageType::ReliableBroadcast(rbc_msg) => {
+                let node_state = self.node_states.get_mut(&message.header().from());
+
+                if let Some(node_state) = node_state {
+                    match node_state {
+                        NodeState::RunningRBC(rbc) => {
+                            let stored_message = StoredMessage::new(
+                                message.header().clone(),
+                                rbc_msg.clone(),
+                            );
+
+                            todo!()
+                        }
+                        NodeState::RunningABA { .. } => {
+                            todo!()
+                        }
+                        NodeState::Completed { .. } => {
+                            todo!()
+                        }
+                    }
+                } else {
+                    todo!()
+                }
+            }
+            DumboMessageType::AsyncBinaryAgreement(aba_msg) => {
+                todo!()
+            }
+            DumboMessageType::CommitteeElectionMessage(ce_msg) => {
+                todo!()
+            }
+        }
+
+    }
+
     fn completed_node_count(&self) -> usize {
         self.node_states
             .iter()
@@ -121,4 +168,11 @@ where
             } => write!(f, "Completed({})", value),
         }
     }
+}
+
+pub(super) enum EpochResult {
+    MessageIgnored,
+    MessageQueued,
+    MessageProcessed,
+    Finalized,
 }

@@ -1,3 +1,5 @@
+#![feature(lazy_type_alias)]
+
 mod reliable_broadcast {
     pub mod messages;
     pub mod reliable_broadcast;
@@ -33,4 +35,5 @@ pub mod dumbo1 {
     pub mod protocol;
     mod epoch;
     mod message;
+    mod network;
 }

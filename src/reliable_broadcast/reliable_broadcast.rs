@@ -83,7 +83,7 @@ where
         network: &Arc<NT>,
     ) -> ReliableBroadcastResult<RQ>
     where
-        NT: ReliableBroadcastSendNode<RQ>,
+        NT: ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>,
     {
         let (header, message) = sys_msg.clone().into_inner();
 
@@ -160,7 +160,7 @@ where
 
     fn broadcast_echo_message<NT>(&self, digest: Digest, network: &Arc<NT>)
     where
-        NT: ReliableBroadcastSendNode<RQ>,
+        NT: ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>,
     {
         let message = ReliableBroadcastMessage::Echo(digest);
 
@@ -173,7 +173,7 @@ where
 
     fn broadcast_ready_message<NT>(&self, digest: Digest, network: &Arc<NT>)
     where
-        NT: ReliableBroadcastSendNode<RQ>,
+        NT: ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>,
     {
         let message = ReliableBroadcastMessage::Ready(digest);
 

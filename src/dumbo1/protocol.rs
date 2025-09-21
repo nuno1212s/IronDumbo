@@ -7,6 +7,7 @@ use crate::rbc::ReliableBroadcast;
 use atlas_common::error::Result;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
+use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
 use atlas_core::ordering_protocol::{
     OPExResult, OPResult, OrderProtocolTolerance, OrderingProtocol, ShareableConsensusMessage,
 };
@@ -19,12 +20,19 @@ use std::sync::{Arc, LazyLock};
 /// Used for logging and metrics.
 const DUMBO1_MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Dumbo1"));
 
-type DumboPSerialization<
+pub type DumboPSerialization<
     RQ,
     R: ReliableBroadcast<RQ>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
 > = DumboSerialization<RQ, R::ReliableBroadcastMessage, A::AsyncBinaryMessage, CE::Message>;
+
+pub(super) type DumboPMessage<
+    RQ: 'static,
+    R: ReliableBroadcast<RQ>,
+    A: ABAProtocol,
+    CE: CommitteeElectionProtocol,
+> = <DumboPSerialization<RQ, R, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
 
 /// An instance of the Dumbo protocol.
 /// Holds the state of the protocol for a specific epoch.
@@ -99,12 +107,7 @@ where
     fn handle_timeout(
         &mut self,
         timeout: Vec<ModTimeout>,
-    ) -> Result<
-        OPExResult<
-            RQ,
-            DumboPSerialization<RQ, R, A, CE>,
-        >,
-    > {
+    ) -> Result<OPExResult<RQ, DumboPSerialization<RQ, R, A, CE>>> {
         todo!()
     }
 }

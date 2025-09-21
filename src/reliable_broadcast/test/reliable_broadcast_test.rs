@@ -26,7 +26,7 @@ impl MockNetwork {
 
 type MsgType = u8;
 
-impl ReliableBroadcastSendNode<MsgType> for MockNetwork {
+impl ReliableBroadcastSendNode<ReliableBroadcastMessage<MsgType>> for MockNetwork {
     fn send(
         &self,
         message: ReliableBroadcastMessage<MsgType>,

@@ -8,15 +8,27 @@ use atlas_core::ordering_protocol::networking::serialize::{
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
+use getset::Getters;
 
 /// A message used in the Dumbo1 protocol.
 /// This struct encapsulates a message round and the message type.
 /// See [`DumboMessageType`]
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, Getters)]
 pub struct DumboMessage<RBM, AM, CEM>
 {
     message_round: SeqNo,
+    #[get = "pub"]
     message_type: DumboMessageType<RBM, AM, CEM>,
+}
+
+impl<RBM, AM, CEM> DumboMessage<RBM, AM, CEM>
+{
+    pub fn new(message_round: SeqNo, message_type: DumboMessageType<RBM, AM, CEM>) -> Self {
+        Self {
+            message_round,
+            message_type,
+        }
+    }
 }
 
 impl<RBM, AM, CEM> Orderable for DumboMessage<RBM, AM, CEM>

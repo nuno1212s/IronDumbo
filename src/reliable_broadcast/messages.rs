@@ -1,7 +1,8 @@
 use atlas_common::crypto::hash::Digest;
 use atlas_communication::message::StoredMessage;
+use serde::{Deserialize, Serialize};
 
-#[derive(Debug)]
+#[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum ReliableBroadcastMessage<RQ> {
     Send(Vec<StoredMessage<RQ>>, Digest),
     Echo(Digest),
