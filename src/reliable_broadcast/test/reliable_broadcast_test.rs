@@ -31,33 +31,14 @@ impl ReliableBroadcastSendNode<ReliableBroadcastMessage<MsgType>> for MockNetwor
         &self,
         message: ReliableBroadcastMessage<MsgType>,
         target: NodeId,
-        flush: bool,
-    ) -> atlas_common::error::Result<()> {
-        self.send_signed(message, target, flush)
-    }
-    fn send_signed(
-        &self,
-        message: ReliableBroadcastMessage<MsgType>,
-        target: NodeId,
         _flush: bool,
     ) -> atlas_common::error::Result<()> {
         let targets_vec: Vec<NodeId> = vec![target];
         self.sent.borrow_mut().push((message, targets_vec));
         Ok(())
     }
+
     fn broadcast<I>(
-        &self,
-        message: ReliableBroadcastMessage<MsgType>,
-        targets: I,
-    ) -> Result<(), Vec<NodeId>>
-    where
-        I: Iterator<Item = NodeId>,
-    {
-        let targets_vec: Vec<NodeId> = targets.collect();
-        self.sent.borrow_mut().push((message, targets_vec));
-        Ok(())
-    }
-    fn broadcast_signed<I>(
         &self,
         message: ReliableBroadcastMessage<MsgType>,
         targets: I,

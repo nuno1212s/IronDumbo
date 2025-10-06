@@ -101,7 +101,7 @@ impl TestData {
     ) -> AsyncBinaryAgreementResult {
         let stored = stored_msg(from, self.node_id.clone(), msg);
 
-        self.aba.process_message(stored, &self.network)
+        self.aba.process_message(stored, &self.network).unwrap()
     }
 }
 
@@ -411,8 +411,13 @@ fn test_finish_round_2f_plus_1_finalization() {
         } else {
             // The final message should result in finalization
             assert!(
-                matches!(result, AsyncBinaryAgreementResult::Decided(value, ..) if value == INITIAL_ESTIMATE)
+                matches!(result, AsyncBinaryAgreementResult::Decided)
             );
+            
         }
     }
+    
+    let result = test_data.aba.finalize().unwrap();
+    
+    assert_eq!(result, INITIAL_ESTIMATE);
 }

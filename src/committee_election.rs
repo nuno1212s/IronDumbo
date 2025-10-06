@@ -1,4 +1,5 @@
 use std::error::Error;
+use atlas_common::error;
 use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
@@ -35,9 +36,7 @@ pub trait CommitteeElectionSendNode<CE>
 where
     CE: SerMsg,
 {
-    fn send(&self, message: CE, target: NodeId, flush: bool) -> Result<(), ()>;
-
-    fn send_signed(&self, message: CE, target: NodeId, flush: bool) -> Result<(), ()>;
+    fn send(&self, message: CE, target: NodeId, flush: bool) -> error::Result<()>;
 
     fn broadcast<I>(&self, message: CE, targets: I) -> Result<(), Vec<NodeId>>
     where

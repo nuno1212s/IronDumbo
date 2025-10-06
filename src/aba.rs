@@ -13,7 +13,7 @@ use atlas_communication::message::StoredMessage;
 pub trait ABAProtocol {
 
     type AsyncBinaryMessage: SerMsg;
-    type ABAError: Error + Send + Sync;
+    type ABAError: Error + Send + Sync + 'static;
 
     fn new(input_bit: bool) -> Self;
 

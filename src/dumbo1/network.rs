@@ -1,18 +1,20 @@
 use crate::aba::AsyncBinaryAgreementSendNode;
 use crate::committee_election::CommitteeElectionSendNode;
 use crate::dumbo1::message::{DumboMessage, DumboMessageType, DumboSerialization};
-use crate::dumbo1::protocol::{DumboPMessage, DumboPSerialization};
 use crate::rbc::ReliableBroadcastSendNode;
+use anyhow::anyhow;
+use atlas_common::error;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
-use atlas_common::serialization_helper::SerMsg;
+use atlas_common::phantom::FPhantom;
+use atlas_common::serialization_helper::{Ser, SerMsg};
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
 struct SendNode<RQ, ABA, BCM, CE> {
     current_round: SeqNo,
-    _phantom: PhantomData<fn(RQ, ABA, BCM, CE) -> ()>,
+    _phantom: FPhantom<(RQ, ABA, BCM, CE)>,
 }
 
 impl<RQ, ABA, BCM, CE> SendNode<RQ, ABA, BCM, CE>
@@ -20,6 +22,7 @@ where
     RQ: SerMsg,
     ABA: SerMsg,
     CE: SerMsg,
+    BCM: SerMsg,
 {
     fn send_rbc<NT>(
         &self,
@@ -30,7 +33,6 @@ where
     ) -> atlas_common::error::Result<()>
     where
         NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
-        BCM: SerMsg,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -49,7 +51,6 @@ where
     ) -> atlas_common::error::Result<()>
     where
         NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
-        BCM: SerMsg,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -63,7 +64,6 @@ where
     where
         I: Iterator<Item = NodeId>,
         NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
-        BCM: SerMsg,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -82,7 +82,6 @@ where
     where
         I: Iterator<Item = NodeId>,
         NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
-        BCM: SerMsg,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -91,7 +90,52 @@ where
 
         node.broadcast_signed(message, targets)
     }
+
+    fn broadcast_aba<I, NT>(&self, node: &NT, message: ABA, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: Iterator<Item = NodeId>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    {
+        let message = DumboMessage::new(
+            self.current_round,
+            DumboMessageType::AsyncBinaryAgreement(message),
+        );
+
+        node.broadcast(message, targets)
+    }
+
+    fn send_ce_msg_signed<NT>(
+        &self,
+        node: &NT,
+        message: CE,
+        target: NodeId,
+        flush: bool,
+    ) -> error::Result<()>
+    where
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    {
+        let message = DumboMessage::new(
+            self.current_round,
+            DumboMessageType::CommitteeElectionMessage(message),
+        );
+
+        node.send_signed(message, target, flush)
+    }
+
+    fn broadcast_ce_msg<I, NT>(&self, node: &NT, message: CE, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: Iterator<Item = NodeId>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    {
+        let message = DumboMessage::new(
+            self.current_round,
+            DumboMessageType::CommitteeElectionMessage(message),
+        );
+
+        node.broadcast_signed(message, targets)
+    }
 }
+
 pub(super) struct SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT> {
     inner: &'a Arc<NT>,
     inner_node: SendNode<RQ, ABA, BCM, CE>,
@@ -123,12 +167,15 @@ where
     CE: SerMsg,
     NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
 {
-    fn broadcast_message<I>(&self, message: ABA, target: I) -> atlas_common::error::Result<()>
+    fn broadcast_message<I>(&self, message: ABA, target: I) -> error::Result<()>
     where
         I: Iterator<Item = NodeId>,
         ABA: SerMsg,
     {
-        todo!()
+        //TODO: Improve error system
+        self.inner_node
+            .broadcast_aba(&**self.inner, message, target)
+            .map_err(|failed| anyhow!("Failed to broadcast to some nodes: {:?}", failed))
     }
 }
 
@@ -141,24 +188,17 @@ where
     CE: SerMsg,
     NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
 {
-    fn send(&self, message: CE, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
-        todo!()
-    }
-
-    fn send_signed(
-        &self,
-        message: CE,
-        target: NodeId,
-        flush: bool,
-    ) -> atlas_common::error::Result<()> {
-        todo!()
+    fn send(&self, message: CE, target: NodeId, flush: bool) -> error::Result<()> {
+        self.inner_node
+            .send_ce_msg_signed(&**self.inner, message, target, flush)
     }
 
     fn broadcast<I>(&self, message: CE, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: IntoIterator<Item = NodeId>,
     {
-        todo!()
+        self.inner_node
+            .broadcast_ce_msg(&**self.inner, message, targets.into_iter())
     }
 }
 
@@ -173,16 +213,6 @@ where
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
-            .send_rbc::<NT>(&*self.inner, message, target, flush)
-    }
-
-    fn send_signed(
-        &self,
-        message: BCM,
-        target: NodeId,
-        flush: bool,
-    ) -> atlas_common::error::Result<()> {
-        self.inner_node
             .send_rbc_signed::<NT>(&*self.inner, message, target, flush)
     }
 
@@ -191,26 +221,7 @@ where
         I: Iterator<Item = NodeId>,
     {
         self.inner_node
-            .broadcast_rbc::<I, NT>(&*self.inner, message, targets)
-    }
-
-    fn broadcast_signed<I>(&self, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
-    where
-        I: Iterator<Item = NodeId>,
-    {
-        self.inner_node
             .broadcast_rbc_signed::<I, NT>(&*self.inner, message, targets)
-    }
-}
-
-impl<RA, ABA, BCM, CE, NT> SendNodeWrapperRef<'_, RA, ABA, BCM, CE, NT>
-where
-    RA: SerMsg,
-    ABA: SerMsg,
-    CE: SerMsg,
-{
-    pub(super) fn current_round(&self) -> SeqNo {
-        self.inner_node.current_round
     }
 }
 
@@ -229,16 +240,6 @@ where
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
-            .send_rbc::<NT>(&*self.inner, message, target, flush)
-    }
-
-    fn send_signed(
-        &self,
-        message: BCM,
-        target: NodeId,
-        flush: bool,
-    ) -> atlas_common::error::Result<()> {
-        self.inner_node
             .send_rbc_signed::<NT>(&*self.inner, message, target, flush)
     }
 
@@ -247,15 +248,49 @@ where
         I: Iterator<Item = NodeId>,
     {
         self.inner_node
-            .broadcast_rbc::<I, NT>(&*self.inner, message, targets)
+            .broadcast_rbc_signed::<I, NT>(&*self.inner, message, targets)
     }
+}
 
-    fn broadcast_signed<I>(&self, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
+impl<RQ, ABA, CE, BCM, NT> AsyncBinaryAgreementSendNode<ABA>
+    for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+where
+    RQ: SerMsg,
+    ABA: SerMsg,
+    BCM: SerMsg,
+    CE: SerMsg,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+{
+    fn broadcast_message<I>(&self, message: ABA, target: I) -> error::Result<()>
     where
         I: Iterator<Item = NodeId>,
+        ABA: SerMsg,
     {
         self.inner_node
-            .broadcast_rbc_signed::<I, NT>(&*self.inner, message, targets)
+            .broadcast_aba(&*self.inner, message, target)
+            .map_err(|failed| anyhow!("Failed to broadcast to some nodes: {:?}", failed))
+    }
+}
+
+impl<RQ, ABA, BCM, CE, NT> CommitteeElectionSendNode<CE> for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+where
+    RQ: SerMsg,
+    ABA: SerMsg,
+    BCM: SerMsg,
+    CE: SerMsg,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+{
+    fn send(&self, message: CE, target: NodeId, flush: bool) -> error::Result<()> {
+        self.inner_node
+            .send_ce_msg_signed(&*self.inner, message, target, flush)
+    }
+
+    fn broadcast<I>(&self, message: CE, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: IntoIterator<Item = NodeId>,
+    {
+        self.inner_node
+            .broadcast_ce_msg(&*self.inner, message, targets.into_iter())
     }
 }
 

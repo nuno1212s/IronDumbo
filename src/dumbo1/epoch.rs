@@ -23,6 +23,8 @@ pub(super) struct DumboRound<CE, RQ, R, A> {
     node_states: HashMap<NodeId, NodeState<RQ, R, A>>,
     // The state of the committee election protocol.
     committee_election: CommitteeState<CE>,
+    // The information about the quorum.
+    quorum_info: QuorumInfo,
 }
 
 impl<CE, RQ, R, A> DumboRound<CE, RQ, R, A>
@@ -35,12 +37,13 @@ where
     pub fn new(epoch_num: SeqNo, quorum_info: QuorumInfo) -> Self {
         let required_committee = quorum_info.f() + 1;
 
-        let committee_election_protocol = CE::new(quorum_info, required_committee);
+        let committee_election_protocol = CE::new(quorum_info.clone(), required_committee);
 
         Self {
             epoch_num,
             node_states: HashMap::default(),
             committee_election: CommitteeState::RunningCE(committee_election_protocol),
+            quorum_info,
         }
     }
 
@@ -67,9 +70,15 @@ where
                             let result = rbc.process_message(stored_message, &network);
 
                             match result {
-                                ReliableBroadcastResult::MessageQueued => Ok(EpochResult::MessageQueued),
-                                ReliableBroadcastResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
-                                ReliableBroadcastResult::Processed => Ok(EpochResult::MessageProcessed),
+                                ReliableBroadcastResult::MessageQueued => {
+                                    Ok(EpochResult::MessageQueued)
+                                }
+                                ReliableBroadcastResult::MessageIgnored => {
+                                    Ok(EpochResult::MessageIgnored)
+                                }
+                                ReliableBroadcastResult::Processed => {
+                                    Ok(EpochResult::MessageProcessed)
+                                }
                                 ReliableBroadcastResult::Finalized => {
                                     // Replace with a dummy variable so we can then swap into the new state
                                     let rbc = std::mem::replace(rbc, R::new());
@@ -85,12 +94,8 @@ where
                                 }
                             }
                         }
-                        NodeState::RunningABA { aba, .. } => {
-                            Ok(EpochResult::MessageIgnored)
-                        }
-                        NodeState::Completed { .. } => {
-                            Ok(EpochResult::MessageIgnored)
-                        }
+                        NodeState::RunningABA { aba, .. } => Ok(EpochResult::MessageIgnored),
+                        NodeState::Completed { .. } => Ok(EpochResult::MessageIgnored),
                     }
                 } else {
                     Ok(EpochResult::MessageIgnored)
@@ -98,38 +103,50 @@ where
             }
             DumboMessageType::AsyncBinaryAgreement(aba_msg) => {
                 let node_state = self.node_states.get_mut(&message.header().from());
-                
+
                 if let Some(node_state) = node_state {
-                    match node_state {
+                    let result = match node_state {
                         NodeState::RunningABA { aba, completed_rbc } => {
                             let stored_message =
                                 StoredMessage::new(message.header().clone(), aba_msg.clone());
 
                             let network = SendNodeWrapperRef::new(self.epoch_num.clone(), network);
 
-                            let aba_result = aba.process_message(stored_message, &network)?;
-
-                            match aba_result {
-                                AsyncBinaryAgreementResult::MessageQueued => Ok(EpochResult::MessageQueued),
-                                AsyncBinaryAgreementResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
-                                AsyncBinaryAgreementResult::Processed => Ok(EpochResult::MessageProcessed),
-                                AsyncBinaryAgreementResult::Decided => {
-                                    let protocol = std::mem::replace(aba, A::new(false));
-                                    
-                                    let result = protocol.finalize();
-                                    
-                                    todo!()
-                                }
-                            }
+                            aba.process_message(stored_message, &network)?
                         }
                         NodeState::RunningRBC(_) => {
                             // ABA message received before RBC completion, ignore or queue
                             //TODO: Queue message somewhere
-                            Ok(EpochResult::MessageQueued)
+                            return Ok(EpochResult::MessageQueued);
                         }
                         NodeState::Completed { .. } => {
                             // Node already completed, ignore message
+                            return Ok(EpochResult::MessageIgnored);
+                        }
+                    };
+
+                    match result {
+                        AsyncBinaryAgreementResult::MessageQueued => Ok(EpochResult::MessageQueued),
+                        AsyncBinaryAgreementResult::MessageIgnored => {
                             Ok(EpochResult::MessageIgnored)
+                        }
+                        AsyncBinaryAgreementResult::Processed => Ok(EpochResult::MessageProcessed),
+                        AsyncBinaryAgreementResult::Decided => {
+                            let NodeState::RunningABA { aba, completed_rbc } = node_state else {
+                                unreachable!("Checked above that we are in RunningABA state");
+                            };
+
+                            let protocol = std::mem::replace(aba, A::new(false));
+
+                            let result = protocol.finalize()?;
+
+                            //TODO prevent cloning the complete_rbc
+                            *node_state = NodeState::Completed {
+                                completed_rbc: completed_rbc.clone(),
+                                value: result,
+                            };
+
+                            Ok(EpochResult::MessageProcessed)
                         }
                     }
                 } else {
@@ -138,31 +155,42 @@ where
                 }
             }
             DumboMessageType::CommitteeElectionMessage(ce_msg) => {
-
                 let network = SendNodeWrapperRef::new(self.epoch_num.clone(), network);
 
-                match &mut self.committee_election {
+                let committee_result = match &mut self.committee_election {
                     CommitteeState::RunningCE(committee_election) => {
-                        let stored_message = StoredMessage::new(message.header().clone(), ce_msg.clone());
+                        let stored_message =
+                            StoredMessage::new(message.header().clone(), ce_msg.clone());
 
-                        let committee_result =  committee_election.process_message(stored_message, &network)?;
-
-                        match committee_result {
-                            CommitteeElectionResult::MessageQueued => Ok(EpochResult::MessageQueued),
-                            CommitteeElectionResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
-                            CommitteeElectionResult::Processed => Ok(EpochResult::MessageProcessed),
-                            CommitteeElectionResult::Decided => {
-
-                                todo!()
-                            },
-                        }
+                        committee_election.process_message(stored_message, &network)?
                     }
-                    CommitteeState::Completed { .. } => Ok(EpochResult::MessageIgnored)
+                    CommitteeState::Completed { .. } => return Ok(EpochResult::MessageIgnored),
+                };
+
+                match committee_result {
+                    CommitteeElectionResult::MessageQueued => Ok(EpochResult::MessageQueued),
+                    CommitteeElectionResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
+                    CommitteeElectionResult::Processed => Ok(EpochResult::MessageProcessed),
+                    CommitteeElectionResult::Decided => {
+                        let CommitteeState::RunningCE(ce) = &mut self.committee_election else {
+                            unreachable!("Checked above that we are in RunningCE state");
+                        };
+
+                        let current_ce = std::mem::replace(
+                            ce,
+                            CE::new(self.quorum_info.clone(), self.quorum_info.f() + 1),
+                        );
+
+                        let committee = current_ce.finalize()?;
+
+                        self.committee_election = CommitteeState::Completed { committee };
+
+                        Ok(EpochResult::MessageProcessed)
+                    }
                 }
             }
         }
     }
-
 
     fn completed_node_count(&self) -> usize {
         self.node_states
