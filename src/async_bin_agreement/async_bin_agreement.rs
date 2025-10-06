@@ -8,6 +8,7 @@ use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
 use atlas_communication::message::StoredMessage;
 use getset::{CopyGetters, Getters};
+use thiserror::Error;
 
 /// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
 #[derive(Debug)]
@@ -69,6 +70,7 @@ impl AsyncBinaryAgreement {
 
 impl ABAProtocol for AsyncBinaryAgreement {
     type AsyncBinaryMessage = AsyncBinaryAgreementMessage;
+    type ABAError = ABAError;
 
     fn new(input_bit: bool) -> Self {
         unimplemented!("Use the new function with quorum info and threshold keys")
@@ -82,7 +84,7 @@ impl ABAProtocol for AsyncBinaryAgreement {
         &mut self,
         message: StoredMessage<Self::AsyncBinaryMessage>,
         network: &NT,
-    ) -> AsyncBinaryAgreementResult
+    ) -> Result<AsyncBinaryAgreementResult, ABAError>
     where
         NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
     {
@@ -92,10 +94,10 @@ impl ABAProtocol for AsyncBinaryAgreement {
             // If the message is from a future round, we need to update our state
             self.pending_messages.add_message(round, message);
 
-            return AsyncBinaryAgreementResult::MessageQueued;
+            return Ok(AsyncBinaryAgreementResult::MessageQueued);
         } else if round < self.round {
             // If the message is from a past round, we can ignore it
-            return AsyncBinaryAgreementResult::MessageIgnored;
+            return Ok(AsyncBinaryAgreementResult::MessageIgnored);
         }
 
         let (header, async_bin_message) = message.clone().into_inner();
@@ -122,7 +124,7 @@ impl ABAProtocol for AsyncBinaryAgreement {
             }
         };
 
-        match result {
+        Ok(match result {
             RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed,
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
                 // If we are in a failed state, we move to the next round
@@ -130,7 +132,7 @@ impl ABAProtocol for AsyncBinaryAgreement {
                 AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::Finalized(result) => {
-                AsyncBinaryAgreementResult::Decided(result)
+                AsyncBinaryAgreementResult::Decided
             }
             RoundDataVoteAcceptResult::BroadcastEst(estimate) => {
                 // If we are collecting echoes, we broadcast the estimate
@@ -209,6 +211,16 @@ impl ABAProtocol for AsyncBinaryAgreement {
             RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted => {
                 AsyncBinaryAgreementResult::MessageIgnored
             }
-        }
+        })
     }
+
+    fn finalize(self) -> Result<bool, Self::ABAError> {
+        todo!()
+    }
+}
+
+#[derive(Error, Debug)]
+pub enum ABAError {
+    #[error("The aba protocol has failed to finalize as it is not ready to do so")]
+    FailedToFinalizeNotReady
 }

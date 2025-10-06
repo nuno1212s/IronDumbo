@@ -1,3 +1,4 @@
+use std::error::Error;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
@@ -10,7 +11,9 @@ use atlas_communication::message::StoredMessage;
 /// due to progress in the protocol.
 /// See the [`AsyncBinaryAgreementResult`] enum for possible outcomes of the protocol a message.
 pub trait ABAProtocol {
+
     type AsyncBinaryMessage: SerMsg;
+    type ABAError: Error + Send + Sync;
 
     fn new(input_bit: bool) -> Self;
 
@@ -27,9 +30,12 @@ pub trait ABAProtocol {
         &mut self,
         message: StoredMessage<Self::AsyncBinaryMessage>,
         network: &NT,
-    ) -> AsyncBinaryAgreementResult
+    ) -> Result<AsyncBinaryAgreementResult, Self::ABAError>
     where
         NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>;
+
+    /// Finalize the protocol and obtain the result
+    fn finalize(self) -> Result<bool, Self::ABAError>;
 }
 
 /// Represents the result of processing a message in the asynchronous binary agreement protocol.
@@ -38,7 +44,7 @@ pub enum AsyncBinaryAgreementResult {
     MessageQueued,
     MessageIgnored,
     Processed,
-    Decided(bool),
+    Decided,
 }
 
 /// This trait defines the interface for sending messages in the context of an

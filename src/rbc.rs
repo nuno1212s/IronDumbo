@@ -12,8 +12,11 @@ use std::sync::Arc;
 ///
 pub trait ReliableBroadcast<RQ> {
     type ReliableBroadcastMessage: SerMsg;
+    fn new() -> Self;
 
-    fn new(input: RQ) -> Self;
+    fn new_with_propose<NT>(request: RQ, network: &NT) -> Self
+    where
+        NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>;
 
     fn poll(&mut self) -> Option<Self::ReliableBroadcastMessage>;
 
@@ -28,7 +31,7 @@ pub trait ReliableBroadcast<RQ> {
     fn finalize(self) -> RQ;
 }
 
-enum ReliableBroadcastResult {
+pub enum ReliableBroadcastResult {
     MessageQueued,
     MessageIgnored,
     Processed,
