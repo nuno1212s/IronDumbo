@@ -12,17 +12,19 @@ use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
-struct SendNode<RQ, ABA, BCM, CE> {
+struct SendNode<RQ, ABA, BCM, IBCM, CE> {
     current_round: SeqNo,
-    _phantom: FPhantom<(RQ, ABA, BCM, CE)>,
+    protocol_owner: NodeId,
+    _phantom: FPhantom<(RQ, ABA, BCM, IBCM, CE)>,
 }
 
-impl<RQ, ABA, BCM, CE> SendNode<RQ, ABA, BCM, CE>
+impl<RQ, ABA, BCM, IBCM, CE> SendNode<RQ, ABA, BCM, IBCM, CE>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     CE: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
 {
     fn send_rbc<NT>(
         &self,
@@ -32,11 +34,11 @@ where
         flush: bool,
     ) -> atlas_common::error::Result<()>
     where
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(message),
+            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
         );
 
         node.send(message, target, flush)
@@ -50,11 +52,11 @@ where
         flush: bool,
     ) -> atlas_common::error::Result<()>
     where
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(message),
+            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
         );
 
         node.send_signed(message, target, flush)
@@ -63,11 +65,11 @@ where
     fn broadcast_rbc<I, NT>(&self, node: &NT, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(message),
+            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
         );
 
         node.broadcast(message, targets)
@@ -81,11 +83,11 @@ where
     ) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(message),
+            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
         );
 
         node.broadcast_signed(message, targets)
@@ -94,11 +96,11 @@ where
     fn broadcast_aba<I, NT>(&self, node: &NT, message: ABA, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::AsyncBinaryAgreement(message),
+            DumboMessageType::AsyncBinaryAgreement(self.protocol_owner, message),
         );
 
         node.broadcast(message, targets)
@@ -112,7 +114,7 @@ where
         flush: bool,
     ) -> error::Result<()>
     where
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -125,7 +127,7 @@ where
     fn broadcast_ce_msg<I, NT>(&self, node: &NT, message: CE, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
-        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+        NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
@@ -136,36 +138,38 @@ where
     }
 }
 
-pub(super) struct SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT> {
+pub(super) struct SendNodeWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT> {
     inner: &'a Arc<NT>,
-    inner_node: SendNode<RQ, ABA, BCM, CE>,
+    inner_node: SendNode<RQ, ABA, BCM, IBCM, CE>,
 }
 
-impl<'a, RQ, ABA, BCM, CE, NT> SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT>
+impl<'a, RQ, ABA, BCM, IBCM, CE, NT> SendNodeWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     CE: SerMsg,
 {
-    pub(super) fn new(current_round: SeqNo, inner: &'a Arc<NT>) -> Self {
+    pub(super) fn new(current_round: SeqNo, protocol_owner: NodeId, inner: &'a Arc<NT>) -> Self {
         Self {
             inner,
             inner_node: SendNode {
                 current_round,
+                protocol_owner,
                 _phantom: PhantomData,
             },
         }
     }
 }
 
-impl<'a, RQ, BCM, ABA, CE, NT> AsyncBinaryAgreementSendNode<ABA>
-    for SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT>
+impl<'a, RQ, BCM, IBCM, ABA, CE, NT> AsyncBinaryAgreementSendNode<ABA>
+    for SendNodeWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn broadcast_message<I>(&self, message: ABA, target: I) -> error::Result<()>
     where
@@ -179,14 +183,15 @@ where
     }
 }
 
-impl<'a, RQ, BCM, ABA, CE, NT> CommitteeElectionSendNode<CE>
-    for SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT>
+impl<'a, RQ, BCM, IBCM, ABA, CE, NT> CommitteeElectionSendNode<CE>
+    for SendNodeWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn send(&self, message: CE, target: NodeId, flush: bool) -> error::Result<()> {
         self.inner_node
@@ -202,14 +207,15 @@ where
     }
 }
 
-impl<'a, RQ, ABA, CE, BCM, NT> ReliableBroadcastSendNode<BCM>
-    for SendNodeWrapperRef<'a, RQ, ABA, BCM, CE, NT>
+impl<'a, RQ, ABA, CE, BCM, IBCM, NT> ReliableBroadcastSendNode<BCM>
+    for SendNodeWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     ABA: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
@@ -225,18 +231,19 @@ where
     }
 }
 
-pub(super) struct SendNodeWrapper<RQ, ABA, BCM, CE, NT> {
+pub(super) struct SendNodeWrapper<RQ, ABA, BCM, IBCM, CE, NT> {
     inner: Arc<NT>,
-    inner_node: SendNode<RQ, ABA, BCM, CE>,
+    inner_node: SendNode<RQ, ABA, BCM, IBCM, CE>,
 }
 
-impl<RQ, ABA, CE, BCM, NT> ReliableBroadcastSendNode<BCM> for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+impl<RQ, ABA, CE, BCM, IBCM, NT> ReliableBroadcastSendNode<BCM> for SendNodeWrapper<RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     ABA: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
@@ -252,14 +259,15 @@ where
     }
 }
 
-impl<RQ, ABA, CE, BCM, NT> AsyncBinaryAgreementSendNode<ABA>
-    for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+impl<RQ, ABA, CE, BCM, IBCM, NT> AsyncBinaryAgreementSendNode<ABA>
+    for SendNodeWrapper<RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn broadcast_message<I>(&self, message: ABA, target: I) -> error::Result<()>
     where
@@ -272,13 +280,14 @@ where
     }
 }
 
-impl<RQ, ABA, BCM, CE, NT> CommitteeElectionSendNode<CE> for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+impl<RQ, ABA, BCM, IBCM, CE, NT> CommitteeElectionSendNode<CE> for SendNodeWrapper<RQ, ABA, BCM, IBCM, CE, NT>
 where
     RQ: SerMsg,
     ABA: SerMsg,
     BCM: SerMsg,
+    IBCM: SerMsg,
     CE: SerMsg,
-    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, ABA, CE>>,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
 {
     fn send(&self, message: CE, target: NodeId, flush: bool) -> error::Result<()> {
         self.inner_node
@@ -294,10 +303,10 @@ where
     }
 }
 
-impl<RQ, ABA, BCM, CE, NT> From<SendNodeWrapperRef<'_, RQ, ABA, BCM, CE, NT>>
-    for SendNodeWrapper<RQ, ABA, BCM, CE, NT>
+impl<RQ, ABA, BCM, IBCM, CE, NT> From<SendNodeWrapperRef<'_, RQ, ABA, BCM, IBCM, CE, NT>>
+    for SendNodeWrapper<RQ, ABA, BCM, IBCM, CE, NT>
 {
-    fn from(value: SendNodeWrapperRef<'_, RQ, ABA, BCM, CE, NT>) -> Self {
+    fn from(value: SendNodeWrapperRef<'_, RQ, ABA, BCM, IBCM, CE, NT>) -> Self {
         Self {
             inner: value.inner.clone(),
             inner_node: value.inner_node,

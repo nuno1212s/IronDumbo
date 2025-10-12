@@ -14,31 +14,37 @@ use atlas_core::ordering_protocol::{
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutableMod};
 use getset::{Getters, Setters};
 use std::collections::VecDeque;
+use std::ops::Index;
 use std::sync::{Arc, LazyLock};
 
 /// The name of the Dumbo1 module.
 /// Used for logging and metrics.
 const DUMBO1_MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Dumbo1"));
 
+pub type IndexType = usize;
+
 pub type DumboPSerialization<
     RQ,
     R: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-> = DumboSerialization<RQ, R::ReliableBroadcastMessage, A::AsyncBinaryMessage, CE::Message>;
+> = DumboSerialization<RQ, R::ReliableBroadcastMessage, IR::ReliableBroadcastMessage, A::AsyncBinaryMessage, CE::Message>;
 
+#[allow(dead_code)]
 pub(super) type DumboPMessage<
     RQ: 'static,
     R: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-> = <DumboPSerialization<RQ, R, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
+> = <DumboPSerialization<RQ, R, IR, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
 
 /// An instance of the Dumbo protocol.
 /// Holds the state of the protocol for a specific epoch.
 /// Tracks the state of each node in the protocol.
 #[derive(Debug, Getters, Setters)]
-pub struct Dumbo<CE, RQ, R, A> {
+pub struct Dumbo<CE, RQ, VR, IR, A> {
     // The current epoch number.
     epoch_num: SeqNo,
 
@@ -46,10 +52,10 @@ pub struct Dumbo<CE, RQ, R, A> {
     quorum_info: QuorumInfo,
 
     // The rounds of the dumbo protocol.
-    rounds: VecDeque<DumboRound<CE, RQ, R, A>>,
+    rounds: VecDeque<DumboRound<CE, RQ, VR, IR, A>>,
 }
 
-impl<CE, RQ, R, A> Dumbo<CE, RQ, R, A> {
+impl<CE, RQ, VR, IR, A> Dumbo<CE, RQ, VR, IR, A> {
     pub fn new(quorum_info: QuorumInfo) -> Self {
         Self {
             epoch_num: SeqNo::ONE,
@@ -59,11 +65,12 @@ impl<CE, RQ, R, A> Dumbo<CE, RQ, R, A> {
     }
 }
 
-impl<CE, RQ, R, A> OrderProtocolTolerance for Dumbo<CE, RQ, R, A>
+impl<CE, RQ, VR, IR, A> OrderProtocolTolerance for Dumbo<CE, RQ, VR, IR, A>
 where
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-    R: ReliableBroadcast<RQ>,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
     RQ: SerMsg,
 {
     fn get_n_for_f(f: usize) -> usize {
@@ -80,24 +87,25 @@ where
     }
 }
 
-impl<CE, RQ, R, A> Orderable for Dumbo<CE, RQ, R, A>
+impl<CE, RQ, VR, IR, A> Orderable for Dumbo<CE, RQ, VR, IR, A>
 where
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-    R: ReliableBroadcast<RQ>,
+    VR: ReliableBroadcast<RQ>,
     RQ: SerMsg,
 {
     fn sequence_number(&self) -> SeqNo {
-        self.sequence_number()
+        self.epoch_num
     }
 }
 
-impl<CE, RQ, R, A> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, R, A, CE>>>
-    for Dumbo<CE, RQ, R, A>
+impl<CE, RQ, VR, IR, A> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>>
+    for Dumbo<CE, RQ, VR, IR, A>
 where
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-    R: ReliableBroadcast<RQ>,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<usize>,
     RQ: SerMsg,
 {
     fn mod_name() -> Arc<str> {
@@ -107,20 +115,21 @@ where
     fn handle_timeout(
         &mut self,
         timeout: Vec<ModTimeout>,
-    ) -> Result<OPExResult<RQ, DumboPSerialization<RQ, R, A, CE>>> {
+    ) -> Result<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>> {
         todo!()
     }
 }
 
-impl<CE, RQ, R, A> OrderingProtocol<RQ> for Dumbo<CE, RQ, R, A>
+impl<CE, RQ, VR, IR, A> OrderingProtocol<RQ> for Dumbo<CE, RQ, VR, IR, A>
 where
     RQ: SerMsg,
-    R: ReliableBroadcast<RQ>,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
 {
     type Config = ();
-    type Serialization = DumboPSerialization<RQ, R, A, CE>;
+    type Serialization = DumboPSerialization<RQ, VR, IR, A, CE>;
 
     fn handle_off_ctx_message(
         &mut self,

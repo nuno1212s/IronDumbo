@@ -1,4 +1,5 @@
-#![feature(lazy_type_alias)]
+// This is mostly for the types and restrictions to be clear
+#![allow(type_alias_bounds)]
 
 mod reliable_broadcast {
     pub mod messages;
@@ -36,4 +37,5 @@ pub mod dumbo1 {
     mod epoch;
     mod message;
     mod network;
+    mod node_states;
 }

@@ -21,7 +21,7 @@ impl QuorumInfo {
             quorum_members,
         }
     }
-
+    
     pub fn is_member(&self, node_id: NodeId) -> bool {
         self.quorum_members.contains(&node_id)
     }
