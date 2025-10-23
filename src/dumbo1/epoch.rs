@@ -1,7 +1,8 @@
 use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult};
 use crate::committee_election::{CommitteeElectionProtocol, CommitteeElectionResult};
+use crate::consensus_rqs::ConsensusRequest;
 use crate::dumbo1::message::DumboMessageType;
-use crate::dumbo1::network::SendNodeWrapperRef;
+use crate::dumbo1::network::{SendNodeIBCMWrapperRef, SendNodeWrapperRef};
 use crate::dumbo1::node_states::{
     CommitteeNodeExecuting, CommitteeNodeState, CommitteeState, LocalDumboState, NodeState,
     NonCommitteeNodeExec, NonCommitteeNodeState,
@@ -9,11 +10,12 @@ use crate::dumbo1::node_states::{
 use crate::dumbo1::protocol::{DumboPSerialization, IndexType};
 use crate::quorum_info::quorum_info::QuorumInfo;
 use crate::rbc::{ReliableBroadcast, ReliableBroadcastResult};
-use atlas_common::collections::HashMap;
+use atlas_common::collections::{HashMap, HashSet};
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
+use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::ShareableConsensusMessage;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::fmt::Debug;
@@ -27,6 +29,8 @@ pub(super) struct DumboRound<CE, RQ, VR, IR, A> {
     node_id: NodeId,
     // The state of each node in the protocol. (excluding ourselves)
     node_states: HashMap<NodeId, NodeState<RQ, VR, IR, A>>,
+    // Cache of client requests for which we have received via ValueRBCs from other nodes.
+    received_request_cache: HashSet<ClientRqInfo>,
     // Our local state in the protocol.
     local_state: LocalDumboState<RQ, VR, IR, A>,
     // The state of the committee election protocol.
@@ -37,7 +41,7 @@ pub(super) struct DumboRound<CE, RQ, VR, IR, A> {
 
 impl<CE, RQ, VR, IR, A> DumboRound<CE, RQ, VR, IR, A>
 where
-    RQ: SerMsg,
+    RQ: SerMsg + ConsensusRequest,
     VR: ReliableBroadcast<RQ>,
     IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
@@ -52,6 +56,7 @@ where
             epoch_num,
             node_id,
             node_states: HashMap::default(),
+            received_request_cache: HashSet::default(),
             local_state: LocalDumboState::WaitingForCommittee,
             committee_election: CommitteeState::RunningCE(committee_election_protocol),
             quorum_info,
@@ -108,28 +113,19 @@ where
                 let node_state = self.node_states.get_mut(owner);
 
                 if node_state.is_none() {
-                    return Ok(EpochResult::MessageIgnored)
+                    return Ok(EpochResult::MessageIgnored);
                 };
 
                 let node_state = node_state.unwrap();
 
                 let result = match node_state {
-                    NodeState::CommitteeNode(
-                        CommitteeNodeExecuting::RunningValueRBC(rbc),
-                        _,
-                    )
-                    | NodeState::NonCommitteeNode(
-                        NonCommitteeNodeExec::RunningValueRBC(rbc),
-                        _,
-                    ) => {
+                    NodeState::CommitteeNode(CommitteeNodeExecuting::RunningValueRBC(rbc), _)
+                    | NodeState::NonCommitteeNode(NonCommitteeNodeExec::RunningValueRBC(rbc), _) => {
                         let stored_message =
                             StoredMessage::new(message.header().clone(), rbc_msg.clone());
 
-                        let network = SendNodeWrapperRef::new(
-                            self.epoch_num.clone(),
-                            owner.clone(),
-                            network,
-                        );
+                        let network =
+                            SendNodeWrapperRef::new(self.epoch_num.clone(), owner.clone(), network);
 
                         rbc.process_message(stored_message, &network)
                     }
@@ -142,17 +138,13 @@ where
                     ReliableBroadcastResult::Processed => Ok(EpochResult::MessageProcessed),
                     ReliableBroadcastResult::Finalized => {
                         match node_state {
-                            NodeState::CommitteeNode(
-                                committee_node_exec,
-                                committee_node_state,
-                            ) => {
+                            NodeState::CommitteeNode(committee_node_exec, committee_node_state) => {
                                 let value_rbc = std::mem::replace(
                                     committee_node_exec,
                                     CommitteeNodeExecuting::WaitingForRBCs,
                                 );
 
-                                let CommitteeNodeExecuting::RunningValueRBC(rbc) = value_rbc
-                                else {
+                                let CommitteeNodeExecuting::RunningValueRBC(rbc) = value_rbc else {
                                     unreachable!(
                                         "Checked above that we are in RunningValueRBC state"
                                     );
@@ -171,14 +163,19 @@ where
                                     NonCommitteeNodeExec::Completed,
                                 );
 
-                                let NonCommitteeNodeExec::RunningValueRBC(rbc) = value_rbc
-                                else {
+                                let NonCommitteeNodeExec::RunningValueRBC(rbc) = value_rbc else {
                                     unreachable!(
                                         "Checked above that we are in RunningValueRBC state"
                                     );
                                 };
 
                                 let completed_rbc = rbc.finalize();
+
+                                completed_rbc.get_client_rq_info().into_iter().for_each(
+                                    |rq_info| {
+                                        self.received_request_cache.insert(rq_info);
+                                    },
+                                );
 
                                 non_committee_node_state.received_value(completed_rbc);
                             }
@@ -188,13 +185,66 @@ where
                 }
             }
             DumboMessageType::IndexReliableBroadcast(owner_id, rbc_msg) => {
-                todo!()
+                let node_state = self.node_states.get_mut(owner_id);
+
+                if node_state.is_none() {
+                    return Ok(EpochResult::MessageIgnored);
+                }
+
+                let node_state = node_state.unwrap();
+
+                let result = match node_state {
+                    NodeState::CommitteeNode(CommitteeNodeExecuting::RunningIndexRBC(rbc), _) => {
+                        let stored_message =
+                            StoredMessage::new(message.header().clone(), rbc_msg.clone());
+
+                        let network = SendNodeIBCMWrapperRef::new(
+                            self.epoch_num.clone(),
+                            owner_id.clone(),
+                            network,
+                        );
+
+                        rbc.process_message(stored_message, &network)
+                    }
+                    _ => return Ok(EpochResult::MessageIgnored),
+                };
+
+                match result {
+                    ReliableBroadcastResult::MessageQueued => Ok(EpochResult::MessageQueued),
+                    ReliableBroadcastResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
+                    ReliableBroadcastResult::Processed => Ok(EpochResult::MessageProcessed),
+                    ReliableBroadcastResult::Finalized => {
+                        match node_state {
+                            NodeState::CommitteeNode(committee_node_exec, committee_node_state) => {
+                                let value_rbc = std::mem::replace(
+                                    committee_node_exec,
+                                    CommitteeNodeExecuting::WaitingForValues,
+                                );
+
+                                let CommitteeNodeExecuting::RunningIndexRBC(rbc) = value_rbc else {
+                                    unreachable!(
+                                        "Checked above that we are in RunningValueRBC state"
+                                    );
+                                };
+
+                                let index_rbc = rbc.finalize();
+
+                                committee_node_state.received_index(index_rbc);
+                            }
+                            _ => {
+                                unreachable!("Only committee nodes run Index RBC");
+                            }
+                        }
+
+                        Ok(EpochResult::MessageProcessed)
+                    }
+                }
             }
             DumboMessageType::AsyncBinaryAgreement(owner_id, aba_msg) => {
                 let node_state = self.node_states.get_mut(&owner_id);
 
                 if node_state.is_none() {
-                    return Ok(EpochResult::MessageIgnored)
+                    return Ok(EpochResult::MessageIgnored);
                 };
 
                 let node_state = node_state.unwrap();
@@ -227,9 +277,7 @@ where
 
                 match result {
                     AsyncBinaryAgreementResult::MessageQueued => Ok(EpochResult::MessageQueued),
-                    AsyncBinaryAgreementResult::MessageIgnored => {
-                        Ok(EpochResult::MessageIgnored)
-                    }
+                    AsyncBinaryAgreementResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
                     AsyncBinaryAgreementResult::Processed => Ok(EpochResult::MessageProcessed),
                     AsyncBinaryAgreementResult::Decided => {
                         let NodeState::CommitteeNode(committee_node_exec, committee_node_state) =
@@ -238,10 +286,9 @@ where
                             unreachable!("Checked above that we are in RunningABA state");
                         };
 
-                        let CommitteeNodeExecuting::RunningABA(aba) = std::mem::replace(
-                            committee_node_exec,
-                            CommitteeNodeExecuting::Done,
-                        ) else {
+                        let CommitteeNodeExecuting::RunningABA(aba) =
+                            std::mem::replace(committee_node_exec, CommitteeNodeExecuting::Done)
+                        else {
                             unreachable!("Checked above that we are in RunningABA state");
                         };
 
@@ -289,6 +336,12 @@ where
                 }
             })
             .count()
+    }
+    
+    fn check_missing_values<'a>(&self, index: &'a IndexType) -> Vec<&'a ClientRqInfo> {
+        index.iter()
+            .filter(|rq_info| !self.received_request_cache.contains(rq_info))
+            .collect()
     }
 }
 

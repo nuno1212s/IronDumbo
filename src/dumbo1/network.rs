@@ -12,6 +12,32 @@ use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::marker::PhantomData;
 use std::sync::Arc;
 
+enum RBCMsgType<BCM, IBCM> {
+    ReliableBroadcast(BCM),
+    IndexReliableBroadcast(IBCM),
+}
+
+impl<BCM, IBCM> RBCMsgType<BCM, IBCM>
+where
+    BCM: SerMsg,
+    IBCM: SerMsg,
+{
+
+    fn into_dumbo_message_type< ABA, CE>(
+        self,
+        protocol_owner: NodeId,
+    ) -> DumboMessageType<BCM, IBCM, ABA, CE>{
+        match self {
+            RBCMsgType::ReliableBroadcast(msg) => {
+                DumboMessageType::ReliableBroadcast(protocol_owner, msg)
+            }
+            RBCMsgType::IndexReliableBroadcast(msg) => {
+                DumboMessageType::IndexReliableBroadcast(protocol_owner, msg)
+            }
+        }
+    }
+}
+
 struct SendNode<RQ, ABA, BCM, IBCM, CE> {
     current_round: SeqNo,
     protocol_owner: NodeId,
@@ -29,7 +55,7 @@ where
     fn send_rbc<NT>(
         &self,
         node: &NT,
-        message: BCM,
+        message: RBCMsgType<BCM, IBCM>,
         target: NodeId,
         flush: bool,
     ) -> atlas_common::error::Result<()>
@@ -38,7 +64,7 @@ where
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
+            message.into_dumbo_message_type(self.protocol_owner)
         );
 
         node.send(message, target, flush)
@@ -47,7 +73,7 @@ where
     fn send_rbc_signed<NT>(
         &self,
         node: &NT,
-        message: BCM,
+        message: RBCMsgType<BCM, IBCM>,
         target: NodeId,
         flush: bool,
     ) -> atlas_common::error::Result<()>
@@ -56,20 +82,21 @@ where
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
+            message.into_dumbo_message_type(self.protocol_owner)
         );
 
         node.send_signed(message, target, flush)
     }
 
-    fn broadcast_rbc<I, NT>(&self, node: &NT, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
+    fn broadcast_rbc<I, NT>(&self, node: &NT,
+                            message: RBCMsgType<BCM, IBCM>, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
         NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
+            message.into_dumbo_message_type(self.protocol_owner),
         );
 
         node.broadcast(message, targets)
@@ -78,7 +105,7 @@ where
     fn broadcast_rbc_signed<I, NT>(
         &self,
         node: &NT,
-        message: BCM,
+        message: RBCMsgType<BCM, IBCM>,
         targets: I,
     ) -> Result<(), Vec<NodeId>>
     where
@@ -87,7 +114,7 @@ where
     {
         let message = DumboMessage::new(
             self.current_round,
-            DumboMessageType::ReliableBroadcast(self.protocol_owner, message),
+            message.into_dumbo_message_type(self.protocol_owner),
         );
 
         node.broadcast_signed(message, targets)
@@ -219,7 +246,7 @@ where
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
-            .send_rbc_signed::<NT>(&*self.inner, message, target, flush)
+            .send_rbc_signed::<NT>(&*self.inner, RBCMsgType::ReliableBroadcast(message), target, flush)
     }
 
     fn broadcast<I>(&self, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
@@ -227,7 +254,7 @@ where
         I: Iterator<Item = NodeId>,
     {
         self.inner_node
-            .broadcast_rbc_signed::<I, NT>(&*self.inner, message, targets)
+            .broadcast_rbc_signed::<I, NT>(&*self.inner, RBCMsgType::ReliableBroadcast(message), targets)
     }
 }
 
@@ -247,7 +274,7 @@ where
 {
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
         self.inner_node
-            .send_rbc_signed::<NT>(&*self.inner, message, target, flush)
+            .send_rbc_signed::<NT>(&*self.inner, RBCMsgType::ReliableBroadcast(message), target, flush)
     }
 
     fn broadcast<I>(&self, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
@@ -255,7 +282,7 @@ where
         I: Iterator<Item = NodeId>,
     {
         self.inner_node
-            .broadcast_rbc_signed::<I, NT>(&*self.inner, message, targets)
+            .broadcast_rbc_signed::<I, NT>(&*self.inner,  RBCMsgType::ReliableBroadcast(message), targets)
     }
 }
 
@@ -311,5 +338,52 @@ impl<RQ, ABA, BCM, IBCM, CE, NT> From<SendNodeWrapperRef<'_, RQ, ABA, BCM, IBCM,
             inner: value.inner.clone(),
             inner_node: value.inner_node,
         }
+    }
+}
+
+pub(super) struct SendNodeIBCMWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT> {
+    inner: &'a Arc<NT>,
+    inner_node: SendNode<RQ, ABA, BCM, IBCM, CE>,
+}
+
+impl<'a, RQ, ABA, BCM, IBCM, CE, NT> SendNodeIBCMWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
+where
+    RQ: SerMsg,
+    ABA: SerMsg,
+    CE: SerMsg,
+{
+    pub(super) fn new(current_round: SeqNo, protocol_owner: NodeId, inner: &'a Arc<NT>) -> Self {
+        Self {
+            inner,
+            inner_node: SendNode {
+                current_round,
+                protocol_owner,
+                _phantom: PhantomData,
+            },
+        }
+    }
+}
+
+impl<'a, RQ, BCM, IBCM, ABA, CE, NT> ReliableBroadcastSendNode<IBCM>
+    for SendNodeIBCMWrapperRef<'a, RQ, ABA, BCM, IBCM, CE, NT>
+where
+    RQ: SerMsg,
+    BCM: SerMsg,
+    IBCM: SerMsg,
+    ABA: SerMsg,
+    CE: SerMsg,
+    NT: OrderProtocolSendNode<RQ, DumboSerialization<RQ, BCM, IBCM, ABA, CE>>,
+{
+    fn send(&self, message: IBCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()> {
+        self.inner_node
+            .send_rbc_signed::<NT>(&*self.inner, RBCMsgType::IndexReliableBroadcast(message), target, flush)
+    }
+
+    fn broadcast<I>(&self, message: IBCM, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: Iterator<Item = NodeId>,
+    {
+        self.inner_node
+            .broadcast_rbc_signed::<I, NT>(&*self.inner, RBCMsgType::IndexReliableBroadcast(message), targets)
     }
 }

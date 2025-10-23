@@ -81,6 +81,7 @@ pub(super) enum CommitteeNodeExecuting<VR, IR, A> {
     RunningValueRBC(VR),
     WaitingForRBCs,
     RunningIndexRBC(IR),
+    WaitingForValues,
     RunningABA(A),
     Done,
 }
@@ -97,8 +98,9 @@ where
             CommitteeNodeExecuting::RunningValueRBC(rbc) => write!(f, "RunningRBC({:?})", rbc),
             CommitteeNodeExecuting::WaitingForRBCs => write!(f, "WaitingForRBCs"),
             CommitteeNodeExecuting::RunningIndexRBC(rbc) => write!(f, "RunningIndexRBC({:?})", rbc),
+            CommitteeNodeExecuting::WaitingForValues => write!(f, "WaitingForValues"),
             CommitteeNodeExecuting::RunningABA(aba) => write!(f, "RunningABA({:?})", aba),
-            CommitteeNodeExecuting::Done => write!(f, "Done")
+            CommitteeNodeExecuting::Done => write!(f, "Done"),
         }
     }
 }
@@ -166,6 +168,12 @@ impl<RQ> Debug for CommitteeNodeState<RQ> {
     }
 }
 
+impl<RQ > Default for CommitteeNodeState<RQ> {
+    fn default() -> Self {
+        CommitteeNodeState::Empty
+    }
+}
+
 /// The state of a non-committee node in the Dumbo protocol.
 pub(super) enum NonCommitteeNodeExec<R> {
     RunningValueRBC(R),
@@ -203,5 +211,11 @@ impl<RQ> Debug for NonCommitteeNodeState<RQ> {
             NonCommitteeNodeState::Empty => write!(f, "Empty"),
             NonCommitteeNodeState::ValueRBC { .. } => write!(f, "ValueRBC"),
         }
+    }
+}
+
+impl<RQ> Default for NonCommitteeNodeState<RQ> {
+    fn default() -> Self {
+        NonCommitteeNodeState::Empty
     }
 }

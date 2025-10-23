@@ -10,7 +10,7 @@ use atlas_communication::message::{Header, StoredMessage};
 /// Meant to represent a committee election protocol and 
 pub trait CommitteeElectionProtocol {
     type Message: SerMsg;
-    type CEError: Error + Send + Sync + 'static;
+    type CEError: Error + Send + Sync + 'static ;
 
     fn new(quorum_info: QuorumInfo, committee_size: usize) -> Self;
 

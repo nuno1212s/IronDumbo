@@ -31,6 +31,7 @@ pub mod aba;
 pub mod rbc;
 mod rq_aggregator;
 mod committee_election;
+mod consensus_rqs;
 
 pub mod dumbo1 {
     pub mod protocol;

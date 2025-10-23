@@ -1,5 +1,6 @@
 use crate::aba::ABAProtocol;
 use crate::committee_election::CommitteeElectionProtocol;
+use crate::consensus_rqs::ConsensusRequest;
 use crate::dumbo1::epoch::DumboRound;
 use crate::dumbo1::message::DumboSerialization;
 use crate::quorum_info::quorum_info::QuorumInfo;
@@ -7,6 +8,7 @@ use crate::rbc::ReliableBroadcast;
 use atlas_common::error::Result;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
+use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
 use atlas_core::ordering_protocol::{
     OPExResult, OPResult, OrderProtocolTolerance, OrderingProtocol, ShareableConsensusMessage,
@@ -14,14 +16,13 @@ use atlas_core::ordering_protocol::{
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutableMod};
 use getset::{Getters, Setters};
 use std::collections::VecDeque;
-use std::ops::Index;
 use std::sync::{Arc, LazyLock};
 
 /// The name of the Dumbo1 module.
 /// Used for logging and metrics.
 const DUMBO1_MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Dumbo1"));
 
-pub type IndexType = usize;
+pub type IndexType = Vec<ClientRqInfo>;
 
 pub type DumboPSerialization<
     RQ,
@@ -105,7 +106,7 @@ where
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
     VR: ReliableBroadcast<RQ>,
-    IR: ReliableBroadcast<usize>,
+    IR: ReliableBroadcast<IndexType>,
     RQ: SerMsg,
 {
     fn mod_name() -> Arc<str> {
@@ -122,7 +123,7 @@ where
 
 impl<CE, RQ, VR, IR, A> OrderingProtocol<RQ> for Dumbo<CE, RQ, VR, IR, A>
 where
-    RQ: SerMsg,
+    RQ: SerMsg + ConsensusRequest,
     VR: ReliableBroadcast<RQ>,
     IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
