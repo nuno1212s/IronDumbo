@@ -1,149 +1,102 @@
-use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult};
-use crate::committee_election::{CommitteeElectionProtocol, CommitteeElectionResult};
-use crate::consensus_rqs::ConsensusRequest;
-use crate::dumbo1::epoch_round_state::DumboRoundState;
-use crate::dumbo1::message::DumboMessageType;
-use crate::dumbo1::network::{SendNodeIBCMWrapperRef, SendNodeWrapperRef};
-use crate::dumbo1::node_states::{
-    CommitteeNodeExecuting, CommitteeNodeState, CommitteeState, NodeState, NonCommitteeNodeExec,
-    NonCommitteeNodeState,
-};
-use crate::dumbo1::protocol::{DumboPSerialization, IndexType};
-use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
-use crate::rbc::{ReliableBroadcast, ReliableBroadcastResult};
+use std::sync::Arc;
+use crate::dumbo1::node_states::{CommitteeNodeExecuting, NodeState, NonCommitteeNodeExec};
 use atlas_common::collections::{HashMap, HashSet};
 use atlas_common::error;
 use atlas_common::node_id::NodeId;
-use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::ordering::Orderable;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::ClientRqInfo;
-use atlas_core::ordering_protocol::ShareableConsensusMessage;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use std::fmt::Debug;
-use std::sync::Arc;
-use getset::Getters;
 use thiserror::Error;
+use crate::aba::{ABAProtocol, AsyncBinaryAgreementResult};
+use crate::committee_election::CommitteeElectionProtocol;
+use crate::consensus_rqs::ConsensusRequest;
+use crate::dumbo1::epoch::{DumboRound, EpochResult};
+use crate::dumbo1::network::{SendNodeIBCMWrapperRef, SendNodeWrapperRef};
+use crate::dumbo1::protocol::{DumboPSerialization, IndexType};
+use crate::rbc::{ReliableBroadcast, ReliableBroadcastResult};
 
-#[derive(Getters)]
-pub(super) struct DumboRound<CE, RQ, VR, IR, A> {
-    // The current epoch number.
-    epoch_num: SeqNo,
-    // Our own node ID.
-    #[get = "pub(super)"]
-    node_id: NodeId,
-    // The information about the quorum.
-    #[get = "pub(super)"]
-    quorum_info: QuorumInfo,
-    // The threshold keys for the current quorum.
-    #[get = "pub(super)"]
-    threshold_keys: ThresholdKeys,
-    // Round state of the current round
-    dumbo_round_state: DumboRoundState<CE, RQ, VR, IR, A>,
+pub(super) enum DumboRoundState<CE, RQ, VR, IR, A> {
+    WaitingForCommitteeElection {
+        committee_election: CE,
+    },
+    Running {
+        committee: Vec<NodeId>,
+        // The state of each node in the protocol. (excluding ourselves)
+        node_states: HashMap<NodeId, NodeState<RQ, VR, IR, A>>,
+        // Cache of client requests for which we have received via ValueRBCs from other nodes.
+        received_request_cache: HashSet<ClientRqInfo>,
+        waiting_for_values: HashMap<ClientRqInfo, Vec<NodeId>>,
+    },
 }
 
-impl<CE, RQ, VR, IR, A> Orderable for DumboRound<CE, RQ, VR, IR, A> {
-    fn sequence_number(&self) -> SeqNo {
-        self.epoch_num
+impl<CE, RQ, VR, IR, A> DumboRoundState<CE, RQ, VR, IR, A> {
+    pub fn new(committee_election: CE) -> Self {
+        DumboRoundState::WaitingForCommitteeElection { committee_election }
+    }
+
+    pub fn new_running(
+        committee: Vec<NodeId>,
+        node_states: HashMap<NodeId, NodeState<RQ, VR, IR, A>>,
+    ) -> Self {
+        DumboRoundState::Running {
+            committee,
+            node_states,
+            received_request_cache: HashSet::default(),
+            waiting_for_values: HashMap::default(),
+        }
+    }
+
+    pub fn get_committee_election(&self) -> Option<&CE> {
+        match self {
+            DumboRoundState::WaitingForCommitteeElection { committee_election } => {
+                Some(committee_election)
+            }
+            _ => None,
+        }
+    }
+
+    pub fn is_waiting_for_committee_election(&self) -> bool {
+        matches!(self, DumboRoundState::WaitingForCommitteeElection { .. })
+    }
+
+    pub fn is_running_fully(&self) -> bool {
+        matches!(self, DumboRoundState::Running { .. })
     }
 }
 
-impl<CE, RQ, VR, IR, A> DumboRound<CE, RQ, VR, IR, A>
-where
+pub struct RoundStateParts<RQ, VR, IR, A> {
+    committee: Vec<NodeId>,
+    // The state of each node in the protocol. (excluding ourselves)
+    node_states: HashMap<NodeId, NodeState<RQ, VR, IR, A>>,
+    // Cache of client requests for which we have received via ValueRBCs from other nodes.
+    received_request_cache: HashSet<ClientRqInfo>,
+    waiting_for_values: HashMap<ClientRqInfo, Vec<NodeId>>,
+}
+
+impl<RQ, VR, IR, A> RoundStateParts<RQ, VR, IR, A>where
     RQ: SerMsg + ConsensusRequest,
     VR: ReliableBroadcast<RQ>,
     IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-{
+    A: ABAProtocol, {
     pub fn new(
-        epoch_num: SeqNo,
-        node_id: NodeId,
-        quorum_info: QuorumInfo,
-        threshold_keys: ThresholdKeys,
+        committee: Vec<NodeId>,
+        node_states: HashMap<NodeId, NodeState<RQ, VR, IR, A>>,
+        received_request_cache: HashSet<ClientRqInfo>,
+        waiting_for_values: HashMap<ClientRqInfo, Vec<NodeId>>,
     ) -> Self {
-        let required_committee = quorum_info.f() + 1;
-
-        let committee_election_protocol = CE::new(quorum_info.clone(), required_committee);
-
         Self {
-            epoch_num,
-            node_id,
-            quorum_info,
-            threshold_keys,
-            dumbo_round_state: DumboRoundState::new(committee_election_protocol),
+            committee,
+            node_states,
+            received_request_cache,
+            waiting_for_values,
         }
     }
 
-    pub(super) fn process_message<NT>(
+    fn process_value_rbc_message<NT, CE>(
         &mut self,
-        message: ShareableConsensusMessage<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
-        network: &Arc<NT>,
-    ) -> error::Result<EpochResult>
-    where
-        NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
-    {
-        match message.message().message_type() {
-            DumboMessageType::CommitteeElectionMessage(ce_msg) => {
-                self.process_committee_election_message(network, message.header(), ce_msg)
-            }
-            DumboMessageType::ReliableBroadcast(owner, rbc_msg) => {
-                self.process_value_rbc_message(network, *owner, message.header(), rbc_msg)
-            }
-            DumboMessageType::IndexReliableBroadcast(owner_id, rbc_msg) => {
-                self.process_index_rbc_message(network, *owner_id, message.header(), rbc_msg)
-            }
-            DumboMessageType::AsyncBinaryAgreement(owner_id, aba_msg) => {
-                self.process_aba_message(network, *owner_id, message.header(), aba_msg)
-            }
-        }
-    }
-
-    fn process_committee_election_message<NT>(
-        &mut self,
-        network: &Arc<NT>,
-        message_header: &Header,
-        ce_msg: &CE::Message,
-    ) -> error::Result<EpochResult>
-    where
-        NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
-    {
-        let network = SendNodeWrapperRef::new(self.epoch_num.clone(), self.node_id, network);
-
-        let committee_result = match &mut self.dumbo_round_state {
-            DumboRoundState::WaitingForCommitteeElection { committee_election } => {
-                let stored_message = StoredMessage::new(message_header.clone(), ce_msg.clone());
-
-                committee_election.process_message(stored_message, &network)?
-            }
-            DumboRoundState::Running { .. } => return Ok(EpochResult::MessageIgnored),
-        };
-
-        match committee_result {
-            CommitteeElectionResult::MessageQueued => Ok(EpochResult::MessageQueued),
-            CommitteeElectionResult::MessageIgnored => Ok(EpochResult::MessageIgnored),
-            CommitteeElectionResult::Processed => Ok(EpochResult::MessageProcessed),
-            CommitteeElectionResult::Decided => {
-                let CommitteeState::RunningCE(ce) = &mut self.committee_election else {
-                    unreachable!("Checked above that we are in RunningCE state");
-                };
-
-                let current_ce = std::mem::replace(
-                    ce,
-                    CE::new(self.quorum_info.clone(), self.quorum_info.f() + 1),
-                );
-
-                let committee = current_ce.finalize()?;
-
-                self.committee_election = CommitteeState::Completed { committee };
-
-                Ok(EpochResult::MessageProcessed)
-            }
-        }
-    }
-
-    fn process_value_rbc_message<NT>(
-        &mut self,
+        round_data: &DumboRound<CE, RQ, VR, IR, A>,
         network: &Arc<NT>,
         owner_id: NodeId,
         message_header: &Header,
@@ -151,6 +104,7 @@ where
     ) -> error::Result<EpochResult>
     where
         NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
+        CE: CommitteeElectionProtocol,
     {
         // Get the state of the corresponding reliable broadcast instance
         let Some(node_state) = self.node_states.get_mut(&owner_id) else {
@@ -162,7 +116,7 @@ where
             | NodeState::NonCommitteeNode(NonCommitteeNodeExec::RunningValueRBC(rbc), _) => {
                 let stored_message = StoredMessage::new(message_header.clone(), rbc_msg.clone());
 
-                let network = SendNodeWrapperRef::new(self.epoch_num.clone(), owner_id, network);
+                let network = SendNodeWrapperRef::new(round_data.sequence_number(), owner_id, network);
 
                 rbc.process_message(stored_message, &network)
             }
@@ -219,8 +173,9 @@ where
         }
     }
 
-    fn process_index_rbc_message<NT>(
+    fn process_index_rbc_message<NT, CE>(
         &mut self,
+        round_data: &DumboRound<CE, RQ, VR, IR, A>,
         network: &Arc<NT>,
         owner_id: NodeId,
         message_header: &Header,
@@ -228,6 +183,7 @@ where
     ) -> error::Result<EpochResult>
     where
         NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
+        CE: CommitteeElectionProtocol,
     {
         let Some(node_state) = self.node_states.get_mut(&owner_id) else {
             return Ok(EpochResult::MessageIgnored);
@@ -238,7 +194,7 @@ where
                 let stored_message = StoredMessage::new(message_header.clone(), rbc_msg.clone());
 
                 let network =
-                    SendNodeIBCMWrapperRef::new(self.epoch_num.clone(), owner_id, network);
+                    SendNodeIBCMWrapperRef::new(round_data.sequence_number().clone(), owner_id, network);
 
                 rbc.process_message(stored_message, &network)
             }
@@ -292,8 +248,10 @@ where
         todo!()
     }
 
-    fn process_aba_message<NT>(
+
+    fn process_aba_message<NT, CE>(
         &mut self,
+        round_data: &DumboRound<CE, RQ, VR, IR, A>,
         network: &Arc<NT>,
         owner_id: NodeId,
         message_header: &Header,
@@ -301,6 +259,7 @@ where
     ) -> error::Result<EpochResult>
     where
         NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
+        CE: CommitteeElectionProtocol,
     {
         let Some(node_state) = self.node_states.get_mut(&owner_id) else {
             return Ok(EpochResult::MessageIgnored);
@@ -313,7 +272,7 @@ where
                         StoredMessage::new(message_header.clone(), aba_msg.clone());
 
                     let network =
-                        SendNodeWrapperRef::new(self.epoch_num.clone(), owner_id.clone(), network);
+                        SendNodeWrapperRef::new(round_data.sequence_number(), owner_id.clone(), network);
 
                     aba.process_message(stored_message, &network)?
                 }
@@ -367,25 +326,27 @@ where
         }
     }
 
-    fn prepare_aba_with_input<NT>(
+    fn prepare_aba_with_input<NT, CE>(
         &mut self,
+        round_data: &DumboRound<CE, RQ, VR, IR, A>,
         network: &Arc<NT>,
         completed_node: NodeId,
         input: bool,
-    ) -> Result<EpochResult, ABAPreparationError<A::ABAError>>
+    ) -> Result<EpochResult, A::ABAError>
     where
+        CE: CommitteeElectionProtocol,
         NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
     {
         let node_state = self.node_states.get_mut(&completed_node);
 
         let network =
-            SendNodeWrapperRef::new(self.epoch_num.clone(), completed_node.clone(), network);
+            SendNodeWrapperRef::new(round_data.sequence_number(), completed_node.clone(), network);
 
         if let Some(NodeState::CommitteeNode(committee_node_exec, _)) = node_state {
             let result = match committee_node_exec {
                 CommitteeNodeExecuting::WaitingForValues => {
                     // Proceed to ABA
-                    let mut aba = A::new(self.quorum_info.clone(), self.threshold_keys.clone());
+                    let mut aba = A::new(round_data.quorum_info().clone(), round_data.threshold_keys().clone());
 
                     let result = aba.provide_input_bit(input, &network)?;
 
@@ -405,74 +366,15 @@ where
             Err(ABAPreparationError::NotPartOfCommittee)
         }
     }
-
-    fn is_part_of_committee(&self) -> Result<bool, CheckNodeStateError> {
-        if let CommitteeState::Completed { committee } = &self.committee_election {
-            Ok(committee.contains(&self.node_id))
-        } else {
-            Err(CheckNodeStateError::CommitteeNotCompleted)
-        }
-    }
-
-    fn check_nodes_ready(&mut self) -> Result<bool, CheckNodeStateError> {
-        if !self.is_part_of_committee()? {
-            return Ok(false);
-        }
-
-        Ok(self.completed_rbc_count() >= self.quorum_info.quorum_size())
-    }
-
-    fn completed_rbc_count(&self) -> usize {
-        self.node_states
-            .iter()
-            .filter(|(_, state)| match state {
-                NodeState::CommitteeNode(_, committee_node_state) => {
-                    !matches!(committee_node_state, CommitteeNodeState::Empty)
-                }
-                NodeState::NonCommitteeNode(_, non_committee_node_state) => {
-                    matches!(
-                        non_committee_node_state,
-                        NonCommitteeNodeState::ValueRBC { .. }
-                    )
-                }
-            })
-            .count()
-    }
-
-    fn check_missing_values<'a>(&self, index: &'a IndexType) -> Vec<&'a ClientRqInfo> {
-        index
-            .iter()
-            .filter(|rq_info| !self.received_request_cache.contains(rq_info))
-            .collect()
-    }
 }
 
-impl<CE, RQ, VR, IR, A> Debug for DumboRound<CE, RQ, VR, IR, A>
-where
-    CE: Debug,
-    VR: Debug,
-    IR: Debug,
-    A: Debug,
-{
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        f.debug_struct("DumboRound")
-            .field("epoch_num", &self.epoch_num)
-            .field("node_states", &self.node_states)
-            .field("committee_election", &self.committee_election)
-            .finish()
-    }
-}
 
-pub(super) enum EpochResult {
-    MessageIgnored,
-    MessageQueued,
-    MessageProcessed,
-    Finalized,
-}
-
-/// Error when checking if the node is part of the committee
 #[derive(Debug, Error)]
-enum CheckNodeStateError {
-    #[error("Committee election protocol not completed yet")]
-    CommitteeNotCompleted,
+enum ABAPreparationError<A> {
+    #[error("Node is not waiting for values or running ABA")]
+    NotWaitingForValuesOrRunningABA,
+    #[error("Node is not part of the committee")]
+    NotPartOfCommittee,
+    #[error("Node is not in the correct state to prepare ABA")]
+    ABAError(#[from] A),
 }

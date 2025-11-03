@@ -15,7 +15,7 @@ const F: usize = 1;
 fn test_future_round_message_is_queued() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     // Create a message from a future round (round 1)
     let future_message = get_val_message(INITIAL_ESTIMATE, Some(1));
@@ -51,7 +51,7 @@ fn test_future_round_message_is_queued() {
 fn test_past_round_message_is_ignored() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     test_data.advance_round(INITIAL_ESTIMATE);
 
@@ -70,7 +70,7 @@ fn test_past_round_message_is_ignored() {
 fn test_out_of_order_message_is_queued() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     // In round 0, state starts with CollectingVal
     // Try to send an Aux message which is not expected yet
@@ -86,7 +86,7 @@ fn test_out_of_order_message_is_queued() {
 fn test_duplicate_messages_are_ignored() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     // Send a VAL message from node 1
     let val_message = get_val_message(INITIAL_ESTIMATE, Some(0));
@@ -107,7 +107,7 @@ fn test_duplicate_messages_are_ignored() {
 fn test_erroneous_messages_in_finishing_state() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     // Bring the protocol to the Finishing state
     let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);

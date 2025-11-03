@@ -16,7 +16,7 @@ pub(super) struct RoundData {
     f: usize,
     pub_key: PublicKeySet,
     #[get = "pub"]
-    estimate: bool,
+    estimate: Option<bool>,
     // The values that have been accepted by the round
     values_r: HashSet<bool>,
     val_data: ValRoundData,
@@ -26,7 +26,7 @@ pub(super) struct RoundData {
 }
 
 impl RoundData {
-    pub fn new(f: usize, pub_key_set: PublicKeySet, estimate: bool) -> Self {
+    pub fn new(f: usize, pub_key_set: PublicKeySet, estimate: Option<bool>) -> Self {
         Self {
             state: AsyncBinaryAgreementState::default(),
             f,
@@ -37,6 +37,22 @@ impl RoundData {
             aux_round_data: AuxRoundData::default(),
             conf_round_data: ConfRoundData::default(),
             finish_round_data: FinishRoundData::default(),
+        }
+    }
+
+    pub(super) fn accept_input(&mut self, input: bool) -> RoundDataVoteAcceptResult{
+        match self.estimate {
+            None => {
+                self.estimate = Some(input);
+
+                match self.state {
+                    AsyncBinaryAgreementState::CollectingVal => {
+                        RoundDataVoteAcceptResult::BroadcastEst(input)
+                    }
+                    _ => RoundDataVoteAcceptResult::Ignored,
+                }
+            }
+            Some(_) => RoundDataVoteAcceptResult::Ignored,
         }
     }
 
@@ -162,7 +178,9 @@ impl RoundData {
 
                 return self
                     .perform_coin_flip(&feasible_values, signatures)
-                    .unwrap_or(RoundDataVoteAcceptResult::Failed(self.estimate));
+                    .unwrap_or(RoundDataVoteAcceptResult::Failed(self.estimate.unwrap_or_else(
+                        || feasible_values.first().cloned().unwrap_or_default()
+                    )));
             }
         }
 
@@ -204,10 +222,10 @@ impl RoundData {
         if winning_set[0] == coin_flip_result {
             // If the winning set is the same as the coin flip result, we finalize
             self.state = AsyncBinaryAgreementState::Finishing;
-            self.estimate = coin_flip_result;
+            self.estimate = Some(coin_flip_result);
 
-            if self.finish_round_data.try_register_broadcast(self.estimate) {
-                Ok(RoundDataVoteAcceptResult::BroadcastFinalized(self.estimate))
+            if self.finish_round_data.try_register_broadcast(coin_flip_result) {
+                Ok(RoundDataVoteAcceptResult::BroadcastFinalized(coin_flip_result))
             } else {
                 Ok(RoundDataVoteAcceptResult::Accepted)
             }

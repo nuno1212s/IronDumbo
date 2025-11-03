@@ -22,35 +22,6 @@ where
     }
 }
 
-/// Our local state in the Dumbo protocol.
-pub(super) enum LocalDumboState<RQ, VR, IR, A> {
-    WaitingForCommittee,
-    CommitteeMember(CommitteeLocalState<RQ, VR, IR, A>),
-    NonCommitteeMember(NonCommitteeLocalState<RQ, VR>),
-}
-
-impl<RQ, VR, IR, A> Default for LocalDumboState<RQ, VR, IR, A> {
-    fn default() -> Self {
-        Self::WaitingForCommittee
-    }
-}
-
-/// The local state of a committee member in the Dumbo protocol.
-/// Tracks the execution of the RBCs and ABA protocols that are
-pub(super) enum CommitteeLocalState<RQ, VR, IR, A> {
-    RunningValueRBC { rbc: VR },
-    CompletedValueRBC { value_rbc: RQ },
-    RunningIndexRBC { completed_value_rbc: RQ, rbc: IR },
-    RunningABA { aba: A },
-}
-
-/// The local state of a non-committee member in the Dumbo protocol.
-/// Does not host an index RBC nor the ABA protocol.
-pub(super) enum NonCommitteeLocalState<RQ, R> {
-    RunningRBC { rbc: R },
-    Completed { completed_rbc: RQ },
-}
-
 /// The state of a node in the Dumbo protocol, distinguishing between committee and non-committee nodes.
 ///
 /// Committee nodes participate in both Value and Index RBC as well as having ABA protocol

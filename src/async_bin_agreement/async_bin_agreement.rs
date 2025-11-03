@@ -4,15 +4,11 @@ use crate::async_bin_agreement::messages::{
     AsyncBinaryAgreementMessage, AsyncBinaryAgreementMessageType,
 };
 use crate::async_bin_agreement::pending_messages::PendingMessages;
-use crate::quorum_info::quorum_info::QuorumInfo;
-use atlas_common::crypto::threshold_crypto::{PartialSignature, PrivateKeyPart, PublicKeySet};
+use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
+use atlas_common::crypto::threshold_crypto::PartialSignature;
 use atlas_communication::message::StoredMessage;
 use getset::{CopyGetters, Getters};
 use thiserror::Error;
-
-/// Represents the keys used in the threshold cryptography for the asynchronous binary agreement.
-#[derive(Debug)]
-pub(super) struct ThresholdKeys(PublicKeySet, PrivateKeyPart);
 
 /// Represents the state of an asynchronous binary agreement protocol.
 /// It contains the current round, the input bit, the quorum information,
@@ -21,39 +17,25 @@ pub(super) struct ThresholdKeys(PublicKeySet, PrivateKeyPart);
 pub(super) struct AsyncBinaryAgreement {
     #[get_copy = "pub"]
     round: usize,
-    input_bit: bool,
+    input_bit: Option<bool>,
     quorum_info: QuorumInfo,
     #[get = "pub(super)"]
     current_round: RoundData,
     previous_rounds: Vec<RoundData>,
     pending_messages: PendingMessages,
     threshold_key: ThresholdKeys,
+    result: Option<bool>,
 }
 
 impl AsyncBinaryAgreement {
-    pub fn new(
-        input_bit: bool,
-        quorum_info: QuorumInfo,
-        public_key_set: PublicKeySet,
-        threshold_key: PrivateKeyPart,
-    ) -> Self {
-        let f = quorum_info.f();
-
-        Self {
-            round: 0,
-            input_bit,
-            quorum_info,
-            current_round: RoundData::new(f, public_key_set.clone(), input_bit),
-            previous_rounds: Vec::new(),
-            pending_messages: PendingMessages::default(),
-            threshold_key: ThresholdKeys(public_key_set, threshold_key),
-        }
-    }
-
     pub(super) fn advance_round(&mut self, next_estimate: bool) {
         let f = self.quorum_info.f();
 
-        let new_round = RoundData::new(f, self.threshold_key.0.clone(), next_estimate);
+        let new_round = RoundData::new(
+            f,
+            self.threshold_key.public_key().clone(),
+            Some(next_estimate),
+        );
         let old_round = std::mem::replace(&mut self.current_round, new_round);
 
         self.previous_rounds.push(old_round);
@@ -63,68 +45,20 @@ impl AsyncBinaryAgreement {
 
     fn calculate_threshold_signature_for_round(&self, round: usize) -> PartialSignature {
         self.threshold_key
-            .1
+            .private_key()
             .partially_sign(&round.to_le_bytes()[..])
     }
-}
 
-impl ABAProtocol for AsyncBinaryAgreement {
-    type AsyncBinaryMessage = AsyncBinaryAgreementMessage;
-    type ABAError = ABAError;
-
-    fn new(input_bit: bool) -> Self {
-        unimplemented!("Use the new function with quorum info and threshold keys")
-    }
-
-    fn poll(&mut self) -> Option<StoredMessage<Self::AsyncBinaryMessage>> {
-        self.pending_messages.pop_message(self.round)
-    }
-
-    fn process_message<NT>(
+    fn process_result<NT>(
         &mut self,
-        message: StoredMessage<Self::AsyncBinaryMessage>,
         network: &NT,
-    ) -> Result<AsyncBinaryAgreementResult, ABAError>
+        message: Option<StoredMessage<<AsyncBinaryAgreement as ABAProtocol>::AsyncBinaryMessage>>,
+        result: RoundDataVoteAcceptResult,
+    ) -> AsyncBinaryAgreementResult
     where
-        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
+        NT: AsyncBinaryAgreementSendNode<AsyncBinaryAgreementMessage>,
     {
-        let round = message.message().round();
-
-        if round > self.round {
-            // If the message is from a future round, we need to update our state
-            self.pending_messages.add_message(round, message);
-
-            return Ok(AsyncBinaryAgreementResult::MessageQueued);
-        } else if round < self.round {
-            // If the message is from a past round, we can ignore it
-            return Ok(AsyncBinaryAgreementResult::MessageIgnored);
-        }
-
-        let (header, async_bin_message) = message.clone().into_inner();
-
-        let (_, message_type) = async_bin_message.into_inner();
-
-        let sender = header.from();
-
-        let result = match message_type {
-            AsyncBinaryAgreementMessageType::Val { estimate } => {
-                self.current_round.accept_estimate(sender, estimate)
-            }
-            AsyncBinaryAgreementMessageType::Aux { accepted_estimates } => self
-                .current_round
-                .accept_auxiliary(sender, accepted_estimates),
-            AsyncBinaryAgreementMessageType::Conf {
-                feasible_values,
-                partial_signature,
-            } => self
-                .current_round
-                .accept_confirmation(sender, feasible_values, partial_signature),
-            AsyncBinaryAgreementMessageType::Finish { value } => {
-                self.current_round.accept_finish(sender, value)
-            }
-        };
-
-        Ok(match result {
+        match result {
             RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed,
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
                 // If we are in a failed state, we move to the next round
@@ -132,6 +66,7 @@ impl ABAProtocol for AsyncBinaryAgreement {
                 AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::Finalized(result) => {
+                self.result = Some(result);
                 AsyncBinaryAgreementResult::Decided
             }
             RoundDataVoteAcceptResult::BroadcastEst(estimate) => {
@@ -203,24 +138,122 @@ impl ABAProtocol for AsyncBinaryAgreement {
 
                 AsyncBinaryAgreementResult::Processed
             }
-            RoundDataVoteAcceptResult::Queue => {
+            RoundDataVoteAcceptResult::Queue if message.is_some() => {
                 // If we are collecting echoes, we queue the message for later processing
-                self.pending_messages.add_message(self.round, message);
+                self.pending_messages.add_message(self.round, message.unwrap());
                 AsyncBinaryAgreementResult::MessageQueued
             }
-            RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted => {
+            RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted | _ => {
                 AsyncBinaryAgreementResult::MessageIgnored
             }
-        })
+        }
+    }
+}
+
+impl ABAProtocol for AsyncBinaryAgreement {
+    type AsyncBinaryMessage = AsyncBinaryAgreementMessage;
+    type ABAError = ABAError;
+
+    fn new(
+        quorum_info: QuorumInfo,
+        threshold_keys: ThresholdKeys,
+    ) -> Self {
+        let f = quorum_info.f();
+
+        Self {
+            round: 0,
+            input_bit: None,
+            quorum_info,
+            current_round: RoundData::new(f, threshold_keys.public_key().clone(), None),
+            previous_rounds: Vec::new(),
+            pending_messages: PendingMessages::default(),
+            threshold_key: threshold_keys,
+            result: None,
+        }
+    }
+
+    fn provide_input_bit<NT>(&mut self, input_bit: bool, network: &NT) -> Result<AsyncBinaryAgreementResult, Self::ABAError>
+    where
+        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
+    {
+        if self.input_bit.is_some() {
+            return Err(ABAError::AlreadyProvidedInputBit);
+        }
+
+        self.input_bit = Some(input_bit);
+
+        let result = self.current_round.accept_input(input_bit);
+
+        Ok(self.process_result(network, None, result))
+    }
+
+    fn poll(&mut self) -> Option<StoredMessage<Self::AsyncBinaryMessage>> {
+        self.pending_messages.pop_message(self.round)
+    }
+
+    fn process_message<NT>(
+        &mut self,
+        message: StoredMessage<Self::AsyncBinaryMessage>,
+        network: &NT,
+    ) -> Result<AsyncBinaryAgreementResult, ABAError>
+    where
+        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
+    {
+        let round = message.message().round();
+
+        if round > self.round {
+            // If the message is from a future round, we need to update our state
+            self.pending_messages.add_message(round, message);
+
+            return Ok(AsyncBinaryAgreementResult::MessageQueued);
+        } else if round < self.round {
+            // If the message is from a past round, we can ignore it
+            return Ok(AsyncBinaryAgreementResult::MessageIgnored);
+        } else if self.result.is_some() {
+            // If we have already decided, we can ignore the message
+            return Ok(AsyncBinaryAgreementResult::MessageIgnored);
+        }
+
+        let (header, async_bin_message) = message.clone().into_inner();
+
+        let (_, message_type) = async_bin_message.into_inner();
+
+        let sender = header.from();
+
+        let result = match message_type {
+            AsyncBinaryAgreementMessageType::Val { estimate } => {
+                self.current_round.accept_estimate(sender, estimate)
+            }
+            AsyncBinaryAgreementMessageType::Aux { accepted_estimates } => self
+                .current_round
+                .accept_auxiliary(sender, accepted_estimates),
+            AsyncBinaryAgreementMessageType::Conf {
+                feasible_values,
+                partial_signature,
+            } => self
+                .current_round
+                .accept_confirmation(sender, feasible_values, partial_signature),
+            AsyncBinaryAgreementMessageType::Finish { value } => {
+                self.current_round.accept_finish(sender, value)
+            }
+        };
+
+        Ok(self.process_result(network, Some(message), result))
     }
 
     fn finalize(self) -> Result<bool, Self::ABAError> {
-        todo!()
+        if let Some(result) = self.result {
+            Ok(result)
+        } else {
+            Err(ABAError::FailedToFinalizeNotReady)
+        }
     }
 }
 
 #[derive(Error, Debug)]
 pub enum ABAError {
     #[error("The aba protocol has failed to finalize as it is not ready to do so")]
-    FailedToFinalizeNotReady
+    FailedToFinalizeNotReady,
+    #[error("The input bit has already been provided")]
+    AlreadyProvidedInputBit,
 }

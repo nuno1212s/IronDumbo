@@ -1,7 +1,8 @@
-use std::error::Error;
+use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
+use std::error::Error;
 
 /// A trait representing an asynchronous binary agreement protocol.
 ///
@@ -11,21 +12,29 @@ use atlas_communication::message::StoredMessage;
 /// due to progress in the protocol.
 /// See the [`AsyncBinaryAgreementResult`] enum for possible outcomes of the protocol a message.
 pub trait ABAProtocol {
-
     type AsyncBinaryMessage: SerMsg;
     type ABAError: Error + Send + Sync + 'static;
 
-    fn new(input_bit: bool) -> Self;
+    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys)
+    -> Self;
+
+    /// Attempts to provide the input bit for the protocol.
+    ///
+    /// Returns an error if the input bit has already been provided.
+    fn provide_input_bit<NT>(
+        &mut self,
+        input_bit: bool,
+        network: &NT,
+    ) -> Result<AsyncBinaryAgreementResult, Self::ABAError>
+    where
+        NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>;
 
     /// Polls the protocol for new messages or decisions.
     /// Returns Some(AsyncBinaryAgreementResult) if there is a new message to send or
-    ///
     fn poll(&mut self) -> Option<StoredMessage<Self::AsyncBinaryMessage>>;
 
     /// Processes an incoming message.
     /// Returns an AsyncBinaryAgreementResult indicating the outcome of processing the message.
-    ///
-    ///
     fn process_message<NT>(
         &mut self,
         message: StoredMessage<Self::AsyncBinaryMessage>,

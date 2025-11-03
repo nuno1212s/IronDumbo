@@ -36,7 +36,8 @@ mod consensus_rqs;
 pub mod dumbo1 {
     pub mod protocol;
     mod epoch;
+    mod epoch_round_state;
+    mod node_states;
     mod message;
     mod network;
-    mod node_states;
 }

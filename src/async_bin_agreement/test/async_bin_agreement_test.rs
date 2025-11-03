@@ -4,7 +4,7 @@ use crate::async_bin_agreement::async_bin_agreement_round::AsyncBinaryAgreementS
 use crate::async_bin_agreement::messages::{
     AsyncBinaryAgreementMessage, AsyncBinaryAgreementMessageType,
 };
-use crate::quorum_info::quorum_info::QuorumInfo;
+use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::crypto::threshold_crypto::{PrivateKeyPart, PrivateKeySet};
 use atlas_common::node_id::NodeId;
@@ -66,16 +66,19 @@ pub(super) struct TestData {
 }
 
 impl TestData {
-    pub(super) fn new(id: NodeId, n: usize, f: usize, initial_estimate: bool) -> Self {
+    pub(super) fn new(id: NodeId, n: usize, f: usize) -> Self {
         let qi = quorum_info(n, f);
         let key_set = PrivateKeySet::gen_random(f);
         let pk_set = key_set.public_key_set();
-
-        let aba = AsyncBinaryAgreement::new(
-            initial_estimate,
-            qi.clone(),
+        
+        let threshold_keys = ThresholdKeys::new(
             pk_set.clone(),
             key_set.private_key_part(id.0 as usize),
+        );
+
+        let aba = AsyncBinaryAgreement::new(
+            qi.clone(),
+            threshold_keys,
         );
 
         Self {
@@ -109,7 +112,7 @@ impl TestData {
 fn test_val_round_first_stage() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     let test_message = AsyncBinaryAgreementMessage::new(
         AsyncBinaryAgreementMessageType::Val {
@@ -156,7 +159,7 @@ pub(super) fn perform_full_val_round(
 fn test_val_round_second_stage() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     let test_message = get_val_message(INITIAL_ESTIMATE, None);
 
@@ -171,7 +174,7 @@ fn test_val_round_second_stage() {
 fn test_val_round_ignored() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     let test_message = get_val_message(INITIAL_ESTIMATE, None);
 
@@ -184,7 +187,7 @@ fn test_val_round_ignored() {
     assert_eq!(2, test_data.network().sent.borrow().len());
 }
 
-pub(crate) fn get_aux_message(
+pub(super) fn get_aux_message(
     accepted_estimates: Vec<bool>,
     round: Option<usize>,
 ) -> AsyncBinaryAgreementMessage {
@@ -209,7 +212,7 @@ pub(super) fn perform_full_aux_round(
 fn test_aux_round() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     let val_message = get_val_message(INITIAL_ESTIMATE, None);
 
@@ -278,7 +281,7 @@ fn test_conf_round() {
     let mut achieved_results = HashSet::<AsyncBinaryAgreementState>::default();
 
     while achieved_results.len() < 2 {
-        let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+        let mut test_data = TestData::new(NodeId(0), N, F);
 
         let val_message = get_val_message(INITIAL_ESTIMATE, None);
 
@@ -353,7 +356,7 @@ pub(super) fn get_finish_message(
 fn test_finish_round_f_1() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
 
     perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
 }
@@ -362,7 +365,7 @@ fn test_finish_round_f_1() {
 fn test_finish_round_f_plus_1_broadcast() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
     // First, we need to bring the protocol to the Finishing state
     let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
 
@@ -396,7 +399,7 @@ fn test_finish_round_f_plus_1_broadcast() {
 fn test_finish_round_2f_plus_1_finalization() {
     const INITIAL_ESTIMATE: bool = true;
 
-    let mut test_data = TestData::new(NodeId(0), N, F, INITIAL_ESTIMATE);
+    let mut test_data = TestData::new(NodeId(0), N, F);
     // First, we need to bring the protocol to the Finishing state
     let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
 
