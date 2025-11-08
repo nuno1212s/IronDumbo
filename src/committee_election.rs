@@ -1,16 +1,17 @@
-use std::error::Error;
-use atlas_common::error;
 use crate::quorum_info::quorum_info::QuorumInfo;
+use atlas_common::error;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
+use std::error::Error;
+use std::fmt::Debug;
 
 /// Committee Election Protocol.
-/// 
-/// Meant to represent a committee election protocol and 
-pub trait CommitteeElectionProtocol {
+///
+/// Meant to represent a committee election protocol and
+pub trait CommitteeElectionProtocol: Debug {
     type Message: SerMsg;
-    type CEError: Error + Send + Sync + 'static ;
+    type CEError: Error + Send + Sync + 'static;
 
     fn new(quorum_info: QuorumInfo, committee_size: usize) -> Self;
 

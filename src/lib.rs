@@ -40,4 +40,5 @@ pub mod dumbo1 {
     mod node_states;
     mod message;
     mod network;
+    mod pending_messages;
 }

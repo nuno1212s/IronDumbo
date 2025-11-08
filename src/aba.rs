@@ -3,6 +3,7 @@ use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use std::error::Error;
+use std::fmt::Debug;
 
 /// A trait representing an asynchronous binary agreement protocol.
 ///
@@ -11,7 +12,7 @@ use std::error::Error;
 /// The orchestrator polls regularly to check if there are any messages which are now ready to be processed
 /// due to progress in the protocol.
 /// See the [`AsyncBinaryAgreementResult`] enum for possible outcomes of the protocol a message.
-pub trait ABAProtocol {
+pub trait ABAProtocol: Debug {
     type AsyncBinaryMessage: SerMsg;
     type ABAError: Error + Send + Sync + 'static;
 

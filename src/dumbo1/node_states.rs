@@ -48,7 +48,6 @@ where
 
 /// The state of a committee node in the Dumbo protocol.
 pub(super) enum CommitteeNodeExecuting<VR, IR, A> {
-    None,
     RunningValueRBC(VR),
     WaitingForRBCs,
     RunningIndexRBC(IR),
@@ -65,7 +64,6 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommitteeNodeExecuting::None => write!(f, "None"),
             CommitteeNodeExecuting::RunningValueRBC(rbc) => write!(f, "RunningRBC({:?})", rbc),
             CommitteeNodeExecuting::WaitingForRBCs => write!(f, "WaitingForRBCs"),
             CommitteeNodeExecuting::RunningIndexRBC(rbc) => write!(f, "RunningIndexRBC({:?})", rbc),

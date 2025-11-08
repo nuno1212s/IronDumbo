@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
 use atlas_common::node_id::NodeId;
+use strum_macros::{EnumDiscriminants, EnumIter};
 
 /// A message used in the Dumbo1 protocol.
 /// This struct encapsulates a message round and the message type.
@@ -42,7 +43,8 @@ impl<RBM, IRBM, AM, CEM> Orderable for DumboMessage<RBM, IRBM, AM, CEM> {
 /// Asynchronous Binary Agreement, and Committee Election protocols.
 ///
 /// Each variant holds the corresponding message type.
-#[derive(Clone, Serialize, Deserialize)]
+#[derive(Clone, Serialize, Deserialize, EnumDiscriminants)]
+#[strum_discriminants(derive(Hash, EnumIter))]
 pub enum DumboMessageType<RBM, IRBM, AM, CEM> {
     // The node id of the "owner" of the reliable broadcast execution
     ReliableBroadcast(NodeId, RBM),

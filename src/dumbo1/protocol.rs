@@ -16,6 +16,7 @@ use atlas_core::ordering_protocol::{
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutableMod};
 use getset::{Getters, Setters};
 use std::collections::VecDeque;
+use std::fmt::Debug;
 use std::sync::{Arc, LazyLock};
 
 /// The name of the Dumbo1 module.
@@ -30,22 +31,36 @@ pub type DumboPSerialization<
     IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-> = DumboSerialization<RQ, R::ReliableBroadcastMessage, IR::ReliableBroadcastMessage, A::AsyncBinaryMessage, CE::Message>;
+> = DumboSerialization<
+    RQ,
+    R::ReliableBroadcastMessage,
+    IR::ReliableBroadcastMessage,
+    A::AsyncBinaryMessage,
+    CE::Message,
+>;
 
 #[allow(dead_code)]
 pub(super) type DumboPMessage<
     RQ: 'static,
-    R: ReliableBroadcast<RQ>,
+    VR: ReliableBroadcast<RQ>,
     IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
-> = <DumboPSerialization<RQ, R, IR, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
+> = <DumboPSerialization<RQ, VR, IR, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
 
 /// An instance of the Dumbo protocol.
 /// Holds the state of the protocol for a specific epoch.
 /// Tracks the state of each node in the protocol.
-#[derive(Debug, Getters, Setters)]
-pub struct Dumbo<CE, RQ, VR, IR, A> {
+#[derive(Getters, Setters)]
+pub struct Dumbo<CE, RQ, VR, IR, A>
+where
+    RQ: SerMsg + ConsensusRequest,
+    A: ABAProtocol,
+    CE: CommitteeElectionProtocol,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
+    RQ: SerMsg,
+{
     // The current epoch number.
     epoch_num: SeqNo,
 
@@ -56,7 +71,15 @@ pub struct Dumbo<CE, RQ, VR, IR, A> {
     rounds: VecDeque<DumboRound<CE, RQ, VR, IR, A>>,
 }
 
-impl<CE, RQ, VR, IR, A> Dumbo<CE, RQ, VR, IR, A> {
+impl<CE, RQ, VR, IR, A> Dumbo<CE, RQ, VR, IR, A>
+where
+    RQ: SerMsg + ConsensusRequest,
+    A: ABAProtocol,
+    CE: CommitteeElectionProtocol,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
+    RQ: SerMsg,
+{
     pub fn new(quorum_info: QuorumInfo) -> Self {
         Self {
             epoch_num: SeqNo::ONE,
@@ -68,6 +91,7 @@ impl<CE, RQ, VR, IR, A> Dumbo<CE, RQ, VR, IR, A> {
 
 impl<CE, RQ, VR, IR, A> OrderProtocolTolerance for Dumbo<CE, RQ, VR, IR, A>
 where
+    RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
     VR: ReliableBroadcast<RQ>,
@@ -90,9 +114,11 @@ where
 
 impl<CE, RQ, VR, IR, A> Orderable for Dumbo<CE, RQ, VR, IR, A>
 where
+    RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
     VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
     RQ: SerMsg,
 {
     fn sequence_number(&self) -> SeqNo {
@@ -103,6 +129,7 @@ where
 impl<CE, RQ, VR, IR, A> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>>
     for Dumbo<CE, RQ, VR, IR, A>
 where
+    RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
     VR: ReliableBroadcast<RQ>,
@@ -129,8 +156,8 @@ where
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
 {
-    type Config = ();
     type Serialization = DumboPSerialization<RQ, VR, IR, A, CE>;
+    type Config = ();
 
     fn handle_off_ctx_message(
         &mut self,
@@ -156,5 +183,22 @@ where
 
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
         todo!()
+    }
+}
+
+impl<CE, RQ, VR, IR, A> Debug for Dumbo<CE, RQ, VR, IR, A>
+where
+    RQ: SerMsg + ConsensusRequest + Debug,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
+    A: ABAProtocol,
+    CE: CommitteeElectionProtocol,
+{
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Dumbo(epoch_num: {:?}, rounds: {:?})",
+            self.epoch_num, self.rounds
+        )
     }
 }
