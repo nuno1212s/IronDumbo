@@ -7,7 +7,7 @@ use atlas_common::error;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::SeqNo;
 use atlas_common::phantom::FPhantom;
-use atlas_common::serialization_helper::{Ser, SerMsg};
+use atlas_common::serialization_helper::SerMsg;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::marker::PhantomData;
 use std::sync::Arc;

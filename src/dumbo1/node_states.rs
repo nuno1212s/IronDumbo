@@ -1,6 +1,5 @@
 use crate::aba::ABAProtocol;
 use crate::dumbo1::protocol::IndexType;
-use crate::rbc::ReliableBroadcast;
 use atlas_common::node_id::NodeId;
 use std::fmt::Debug;
 

@@ -19,8 +19,8 @@ use atlas_common::ordering::SeqNo;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::{Header, StoredMessage};
 use atlas_core::messages::ClientRqInfo;
-use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use atlas_core::ordering_protocol::ShareableConsensusMessage;
+use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
 use std::fmt::Debug;
 use std::sync::Arc;
 use thiserror::Error;
@@ -230,7 +230,9 @@ where
     where
         CE: CommitteeElectionProtocol,
     {
-        let nodes_with_pending_messages = pending_messages.nodes_with_pending_messages().collect::<Vec<_>>();
+        let nodes_with_pending_messages = pending_messages
+            .nodes_with_pending_messages()
+            .collect::<Vec<_>>();
 
         for node in nodes_with_pending_messages {
             let Some(node_state) = self.node_states.get(&node) else {
@@ -514,34 +516,34 @@ where
         CE: CommitteeElectionProtocol,
         NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
     {
-        let node_state = self.node_states.get_mut(&completed_node);
+        let Some(NodeState::CommitteeNode(committee_node_exec, _)) =
+            self.node_states.get_mut(&completed_node)
+        else {
+            return Err(ABAPreparationError::NotPartOfCommittee);
+        };
 
         let network = SendNodeWrapperRef::new(seq_no, completed_node.clone(), network);
 
-        if let Some(NodeState::CommitteeNode(committee_node_exec, _)) = node_state {
-            let result = match committee_node_exec {
-                CommitteeNodeExecuting::WaitingForValues => {
-                    // Proceed to ABA
-                    let mut aba = A::new(quorum_info, threshold_keys);
+        let result = match committee_node_exec {
+            CommitteeNodeExecuting::WaitingForValues => {
+                // Proceed to ABA
+                let mut aba = A::new(quorum_info, threshold_keys);
 
-                    let result = aba.provide_input_bit(input, &network)?;
+                let result = aba.provide_input_bit(input, &network)?;
 
-                    *committee_node_exec = CommitteeNodeExecuting::RunningABA(aba);
+                *committee_node_exec = CommitteeNodeExecuting::RunningABA(aba);
 
-                    result
-                }
-                CommitteeNodeExecuting::RunningABA(aba) => {
-                    // Already running ABA, just provide the input and return
-                    aba.provide_input_bit(input, &network)?
-                }
-                _ => return Err(ABAPreparationError::NotWaitingForValuesOrRunningABA),
-            };
+                result
+            }
+            CommitteeNodeExecuting::RunningABA(aba) => {
+                // Already running ABA, just provide the input and return
+                aba.provide_input_bit(input, &network)?
+            }
+            _ => return Err(ABAPreparationError::NotWaitingForValuesOrRunningABA),
+        };
 
-            self.process_aba_result(completed_node, result)
-                .map_err(|err| err.into())
-        } else {
-            Err(ABAPreparationError::NotPartOfCommittee)
-        }
+        self.process_aba_result(completed_node, result)
+            .map_err(|err| err.into())
     }
 
     fn process_aba_result(
@@ -574,9 +576,17 @@ where
 
                 committee_node_state.received_decision(protocol_result);
 
+                if protocol_result {
+                    self.send_negative_input_to_all_pending_aba();
+                }
+
                 EpochResult::MessageProcessed
             }
         })
+    }
+
+    fn send_negative_input_to_all_pending_aba(&mut self) {
+
     }
 
     fn completed_rbc_count(&self) -> usize {
@@ -605,6 +615,24 @@ where
 
     fn is_part_of_committee(&self, node_id: &NodeId) -> bool {
         self.committee.contains(&node_id)
+    }
+
+    fn check_nodes_ready(&self, quorum_info: &QuorumInfo) -> bool {
+        if !self.is_part_of_committee(&quorum_info.own_node_id()) {
+            return false;
+        }
+
+        self.completed_rbc_count() >= quorum_info.quorum_size()
+    }
+
+    fn check_all_committee_nodes_finished(&self) -> bool {
+        let finished_committee_nodes = self.committee.iter()
+            .map(|node| self.node_states.get(node))
+            .filter_map(|node_state| node_state)
+            .filter(|node_state| matches!(node_state, NodeState::CommitteeNode(CommitteeNodeExecuting::Done, CommitteeNodeState::ABA {..})))
+            .count();
+
+        finished_committee_nodes == self.committee.len()
     }
 }
 

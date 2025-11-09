@@ -1,23 +1,29 @@
 use crate::aba::ABAProtocol;
 use crate::committee_election::CommitteeElectionProtocol;
 use crate::consensus_rqs::ConsensusRequest;
-use crate::dumbo1::epoch::DumboRound;
+use crate::dumbo1::epoch::{DumboRound, EpochResult};
 use crate::dumbo1::message::DumboSerialization;
-use crate::quorum_info::quorum_info::QuorumInfo;
+use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
 use crate::rbc::ReliableBroadcast;
 use atlas_common::error::Result;
-use atlas_common::ordering::{Orderable, SeqNo};
+use atlas_common::ordering::{InvalidSeqNo, Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_core::messages::ClientRqInfo;
 use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
-use atlas_core::ordering_protocol::{
-    OPExResult, OPResult, OrderProtocolTolerance, OrderingProtocol, ShareableConsensusMessage,
-};
+use atlas_core::ordering_protocol::{Decision, DecisionInfo, DecisionsAhead, OPExResult, OPExecResult, OPPollResult, OPResult, OrderProtocolTolerance, OrderingProtocol, OrderingProtocolArgs, ShareableConsensusMessage};
 use atlas_core::timeouts::timeout::{ModTimeout, TimeoutableMod};
 use getset::{Getters, Setters};
 use std::collections::VecDeque;
 use std::fmt::Debug;
+use std::ops::{Index, IndexMut};
 use std::sync::{Arc, LazyLock};
+use atlas_common::Err;
+use atlas_common::maybe_vec::MaybeVec;
+use atlas_core::ordering_protocol::networking::{NetworkedOrderProtocolInitializer, OrderProtocolSendNode};
+use either::Either;
+use thiserror::Error;
+use tracing::warn;
+use crate::dumbo1::config::Dumbo1Config;
 
 /// The name of the Dumbo1 module.
 /// Used for logging and metrics.
@@ -52,7 +58,7 @@ pub(super) type DumboPMessage<
 /// Holds the state of the protocol for a specific epoch.
 /// Tracks the state of each node in the protocol.
 #[derive(Getters, Setters)]
-pub struct Dumbo<CE, RQ, VR, IR, A>
+pub struct Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
@@ -66,30 +72,18 @@ where
 
     // The current quorum information
     quorum_info: QuorumInfo,
+    // The threshold keys for the current quorum.
+    threshold_keys: ThresholdKeys,
+    // The watermark for the number of rounds to keep in memory.
+    watermark: usize,
 
+    network: Arc<NT>,
     // The rounds of the dumbo protocol.
     rounds: VecDeque<DumboRound<CE, RQ, VR, IR, A>>,
 }
 
-impl<CE, RQ, VR, IR, A> Dumbo<CE, RQ, VR, IR, A>
-where
-    RQ: SerMsg + ConsensusRequest,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    VR: ReliableBroadcast<RQ>,
-    IR: ReliableBroadcast<IndexType>,
-    RQ: SerMsg,
-{
-    pub fn new(quorum_info: QuorumInfo) -> Self {
-        Self {
-            epoch_num: SeqNo::ONE,
-            quorum_info,
-            rounds: VecDeque::new(),
-        }
-    }
-}
 
-impl<CE, RQ, VR, IR, A> OrderProtocolTolerance for Dumbo<CE, RQ, VR, IR, A>
+impl<CE, RQ, VR, IR, A, NT> OrderProtocolTolerance for Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
@@ -112,7 +106,7 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A> Orderable for Dumbo<CE, RQ, VR, IR, A>
+impl<CE, RQ, VR, IR, A, NT> Orderable for Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
@@ -126,8 +120,8 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>>
-    for Dumbo<CE, RQ, VR, IR, A>
+impl<CE, RQ, VR, IR, A, NT> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>>
+    for Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest,
     A: ABAProtocol,
@@ -148,16 +142,17 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A> OrderingProtocol<RQ> for Dumbo<CE, RQ, VR, IR, A>
+impl<CE, RQ, VR, IR, A, NT> OrderingProtocol<RQ> for Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest,
     VR: ReliableBroadcast<RQ>,
     IR: ReliableBroadcast<IndexType>,
     A: ABAProtocol,
     CE: CommitteeElectionProtocol,
+    NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>,>
 {
     type Serialization = DumboPSerialization<RQ, VR, IR, A, CE>;
-    type Config = ();
+    type Config = Dumbo1Config;
 
     fn handle_off_ctx_message(
         &mut self,
@@ -171,22 +166,132 @@ where
     }
 
     fn poll(&mut self) -> Result<OPResult<RQ, Self::Serialization>> {
-        todo!()
+        let polled_message = self.rounds.front_mut()
+            .map(|round| round.poll())
+            .flatten();
+
+        match polled_message {
+            None => {
+                Ok(OPPollResult::ReceiveMsg)
+            }
+            Some(message) => {
+                Ok(OPPollResult::Exec(message))
+            }
+        }
     }
 
     fn process_message(
         &mut self,
         message: ShareableConsensusMessage<RQ, Self::Serialization>,
     ) -> Result<OPExResult<RQ, Self::Serialization>> {
-        todo!()
+        let message_seq_no = message.message().sequence_number();
+
+        match message_seq_no.index(self.epoch_num) {
+            Either::Left(_) => {
+                Ok(OPExecResult::MessageDropped)
+            }
+            Either::Right(index) => {
+                let result = self.rounds[index]
+                    .process_message(message.clone(), &self.network)?;
+
+                match result {
+                    EpochResult::MessageIgnored => {
+                        Ok(OPExecResult::MessageDropped)
+                    }
+                    EpochResult::MessageQueued | EpochResult::QueueMessage=> {
+                        Ok(OPExecResult::MessageQueued)
+                    }
+                    EpochResult::MessageProcessed => {
+                        let decision = Decision::decision_info_from_message(self.epoch_num, message);
+
+                        Ok(OPExecResult::ProgressedDecision(DecisionsAhead::Ignore, MaybeVec::from_one(decision)))
+                    }
+                    EpochResult::Finalized => {
+                        todo!()
+                    }
+                }
+            }
+        }
+
     }
 
     fn install_seq_no(&mut self, seq_no: SeqNo) -> Result<()> {
-        todo!()
+        match seq_no.index(self.epoch_num) {
+            Either::Left(_) => {
+                warn!("Tried to install an older seq no: {:?}, current: {:?}", seq_no, self.epoch_num);
+
+                Err!(InstallSeqNoError::InstalledOlderSeqNo { current: self.epoch_num, attempted: seq_no })
+            }
+            Either::Right(to_clear) => {
+                for _ in 0..to_clear {
+                    self.rounds.pop_front();
+                }
+
+                self.epoch_num = seq_no;
+
+                let mut current_round_generated_count = 0;
+
+                while self.rounds.len() <= self.watermark {
+                    let new_round = DumboRound::new(
+                        self.epoch_num + SeqNo::from(current_round_generated_count),
+                        self.quorum_info.clone(),
+                        self.threshold_keys.clone()
+                    );
+
+                    self.rounds.push_back(new_round);
+                    current_round_generated_count += 1;
+                }
+
+                Ok(())
+            }
+        }
     }
 }
 
-impl<CE, RQ, VR, IR, A> Debug for Dumbo<CE, RQ, VR, IR, A>
+impl<CE, RQ, VR, IR, A, RP, NT> NetworkedOrderProtocolInitializer<RQ, RP, NT> for Dumbo<CE, RQ, VR, IR, A, NT>
+where
+    RQ: SerMsg + ConsensusRequest,
+    VR: ReliableBroadcast<RQ>,
+    IR: ReliableBroadcast<IndexType>,
+    A: ABAProtocol,
+    CE: CommitteeElectionProtocol,
+    NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>,>,
+{
+    fn initialize(
+        config: Self::Config,
+        order_protocol_args: OrderingProtocolArgs<RQ, RP, NT>,
+    ) -> Result<Self>
+    where
+        Self: Sized,
+    {
+
+        let Dumbo1Config {
+            threshold_keys
+        } = config;
+
+        let OrderingProtocolArgs(
+        node_id,
+        _timeout_mod,
+        _rqpp,
+        batch_output,
+        network,
+        nodes
+        ) = order_protocol_args;
+
+        let info = QuorumInfo::new(nodes.len(), Self::get_f_for_n(nodes.len()), nodes, node_id);
+
+        Ok(Self {
+            epoch_num: SeqNo::from(0),
+            quorum_info: info,
+            threshold_keys,
+            watermark: 1,
+            network,
+            rounds: VecDeque::new(),
+        })
+    }
+}
+
+impl<CE, RQ, VR, IR, A, NT> Debug for Dumbo<CE, RQ, VR, IR, A, NT>
 where
     RQ: SerMsg + ConsensusRequest + Debug,
     VR: ReliableBroadcast<RQ>,
@@ -200,5 +305,14 @@ where
             "Dumbo(epoch_num: {:?}, rounds: {:?})",
             self.epoch_num, self.rounds
         )
+    }
+}
+
+#[derive(Debug, Error)]
+pub enum InstallSeqNoError {
+    #[error("Attempted to install an older seq no. Current: {current:?}, Attempted: {attempted:?}")]
+    InstalledOlderSeqNo {
+        current: SeqNo,
+        attempted: SeqNo,
     }
 }

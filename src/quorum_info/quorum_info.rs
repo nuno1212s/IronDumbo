@@ -7,6 +7,8 @@ use getset::{CopyGetters, Getters};
 #[derive(Debug, Clone, PartialEq, Eq, Getters, CopyGetters)]
 pub struct QuorumInfo {
     #[get_copy = "pub"]
+    own_node_id: NodeId,
+    #[get_copy = "pub"]
     f: usize,
     #[get_copy = "pub"]
     quorum_size: usize,
@@ -15,10 +17,11 @@ pub struct QuorumInfo {
 }
 
 impl QuorumInfo {
-    pub fn new(n: usize, f: usize, quorum_members: Vec<NodeId>) -> Self {
+    pub fn new(n: usize, f: usize, quorum_members: Vec<NodeId>, own_node_id: NodeId) -> Self {
         assert!(n > 0 && f <= (n - 1) / 3, "Invalid quorum parameters");
         let quorum_size = n - f;
         Self {
+            own_node_id,
             f,
             quorum_size,
             quorum_members,

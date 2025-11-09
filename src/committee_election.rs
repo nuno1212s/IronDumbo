@@ -2,7 +2,7 @@ use crate::quorum_info::quorum_info::QuorumInfo;
 use atlas_common::error;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
-use atlas_communication::message::{Header, StoredMessage};
+use atlas_communication::message::StoredMessage;
 use std::error::Error;
 use std::fmt::Debug;
 

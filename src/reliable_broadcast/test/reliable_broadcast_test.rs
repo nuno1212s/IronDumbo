@@ -52,8 +52,8 @@ impl ReliableBroadcastSendNode<ReliableBroadcastMessage<MsgType>> for MockNetwor
     }
 }
 
-fn quorum_info(n: usize, f: usize) -> QuorumInfo {
-    QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect())
+fn quorum_info(n: usize, f: usize, node: NodeId) -> QuorumInfo {
+    QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect(), node)
 }
 
 fn sender_from_quorum(quorum: &QuorumInfo) -> NodeId {
@@ -94,7 +94,7 @@ const F: usize = 1;
 
 #[test]
 fn test_send_phase() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum);
     let network = Arc::new(MockNetwork::new());
@@ -115,7 +115,7 @@ fn test_send_phase() {
 
 #[test]
 fn test_echo_phase() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum);
     let network = Arc::new(MockNetwork::new());
@@ -161,7 +161,7 @@ fn simulate_echo(
 
 #[test]
 fn test_ready_phase_and_deliver() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -202,7 +202,7 @@ fn test_ready_phase_and_deliver() {
 
 #[test]
 fn test_not_enough_echoes_no_ready() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -232,7 +232,7 @@ fn test_not_enough_echoes_no_ready() {
 
 #[test]
 fn test_duplicate_echoes_ignored() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -263,7 +263,7 @@ fn test_duplicate_echoes_ignored() {
 
 #[test]
 fn test_duplicate_readies_ignored() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -295,7 +295,7 @@ fn test_duplicate_readies_ignored() {
 
 #[test]
 fn test_mismatched_digest_ignored() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -327,7 +327,7 @@ fn test_mismatched_digest_ignored() {
 
 #[test]
 fn test_send_after_proposed_ignored() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -351,7 +351,7 @@ fn test_send_after_proposed_ignored() {
 
 #[test]
 fn test_echo_before_send_queued() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());
@@ -369,7 +369,7 @@ fn test_echo_before_send_queued() {
 
 #[test]
 fn test_ready_before_send_queued() {
-    let quorum = quorum_info(N, F);
+    let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
     let network = Arc::new(MockNetwork::new());

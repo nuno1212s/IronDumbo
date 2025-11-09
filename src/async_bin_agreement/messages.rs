@@ -1,5 +1,4 @@
 use atlas_common::crypto::threshold_crypto::PartialSignature;
-use atlas_common::node_id::NodeId;
 use getset::{CopyGetters, Getters};
 use serde::{Deserialize, Serialize};
 

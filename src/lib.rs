@@ -1,4 +1,6 @@
 // This is mostly for the types and restrictions to be clear
+// I do not enable the feature since it has some breaking bugs which cause the code
+// To not compile due to type alias bounds not being allowed in some cases
 #![allow(type_alias_bounds)]
 
 mod reliable_broadcast {
@@ -41,4 +43,5 @@ pub mod dumbo1 {
     mod message;
     mod network;
     mod pending_messages;
+    mod config;
 }

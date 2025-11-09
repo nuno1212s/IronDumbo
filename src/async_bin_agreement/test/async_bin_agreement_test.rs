@@ -47,8 +47,8 @@ pub(super) fn stored_msg<T>(from: NodeId, to: NodeId, msg: T) -> StoredMessage<T
     StoredMessage::new(wire_msg.header().clone(), msg)
 }
 
-pub(super) fn quorum_info(n: usize, f: usize) -> QuorumInfo {
-    QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect())
+pub(super) fn quorum_info(n: usize, f: usize, node: NodeId) -> QuorumInfo {
+    QuorumInfo::new(n, f, (0..n).map(NodeId::from).collect(), node)
 }
 
 const N: usize = 4;
@@ -67,7 +67,7 @@ pub(super) struct TestData {
 
 impl TestData {
     pub(super) fn new(id: NodeId, n: usize, f: usize) -> Self {
-        let qi = quorum_info(n, f);
+        let qi = quorum_info(n, f, id);
         let key_set = PrivateKeySet::gen_random(f);
         let pk_set = key_set.public_key_set();
         

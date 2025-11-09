@@ -6,15 +6,15 @@ use crate::dumbo1::epoch_round_state::{
 };
 use crate::dumbo1::message::DumboMessageType;
 use crate::dumbo1::pending_messages::PendingMessages;
-use crate::dumbo1::protocol::{DumboPMessage, DumboPSerialization, IndexType};
+use crate::dumbo1::protocol::{DumboPSerialization, IndexType};
 use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
 use crate::rbc::ReliableBroadcast;
 use atlas_common::error;
 use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
-use atlas_core::ordering_protocol::ShareableConsensusMessage;
 use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
+use atlas_core::ordering_protocol::ShareableConsensusMessage;
 use getset::Getters;
 use std::fmt::{Debug, Formatter};
 use std::sync::Arc;
@@ -30,9 +30,6 @@ where
 {
     // The current epoch number.
     epoch_num: SeqNo,
-    // Our own node ID.
-    #[get = "pub(super)"]
-    node_id: NodeId,
     // The information about the quorum.
     #[get = "pub(super)"]
     quorum_info: QuorumInfo,
@@ -69,7 +66,6 @@ where
 {
     pub fn new(
         epoch_num: SeqNo,
-        node_id: NodeId,
         quorum_info: QuorumInfo,
         threshold_keys: ThresholdKeys,
     ) -> Self {
@@ -79,12 +75,15 @@ where
 
         Self {
             epoch_num,
-            node_id,
             quorum_info,
             threshold_keys,
             pending_message: PendingMessages::default(),
             dumbo_round_state: DumboRoundState::new(committee_election_protocol),
         }
+    }
+    
+    fn node_id(&self) -> NodeId {
+        self.quorum_info.own_node_id()
     }
 
     pub(super) fn poll(
@@ -193,13 +192,6 @@ where
         }
     }
 
-    fn check_nodes_ready(&mut self) -> Result<bool, CheckNodeStateError> {
-        if !self.dumbo_round_state.is_committee_member(self.node_id())? {
-            return Ok(false);
-        }
-
-        Ok(self.dumbo_round_state.completed_rbc_count() >= self.quorum_info.quorum_size())
-    }
 }
 
 impl<CE, RQ, VR, IR, A> Debug for DumboRound<CE, RQ, VR, IR, A>
@@ -213,7 +205,7 @@ where
     fn fmt(&self, f: &mut Formatter<'_>) -> std::fmt::Result {
         f.debug_struct("DumboRound")
             .field("epoch_num", &self.epoch_num)
-            .field("node_id", &self.node_id)
+            .field("node_id", &self.node_id())
             .field("quorum_info", &self.quorum_info)
             .field("dumbo_round_state", &self.dumbo_round_state)
             .finish()

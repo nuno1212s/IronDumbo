@@ -1,8 +1,7 @@
-use std::fmt::Debug;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
-use atlas_core::messages::ClientRqInfo;
+use std::fmt::Debug;
 
 /// A trait representing a reliable broadcast protocol.
 /// The protocol ensures that messages broadcasted by a node are reliably delivered to all correct nodes in the network.
