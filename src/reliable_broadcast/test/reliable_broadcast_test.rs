@@ -97,12 +97,12 @@ fn test_send_phase() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum);
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(42);
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
 
     // Process SEND
@@ -118,14 +118,14 @@ fn test_echo_phase() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum);
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(42);
 
     // Simulate SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -146,7 +146,7 @@ fn simulate_echo(
     rbc: &mut ReliableBroadcastInstance<MsgType>,
     quorum: &QuorumInfo,
     sender: NodeId,
-    network: &Arc<MockNetwork>,
+    network: &MockNetwork,
     digest: Digest,
 ) {
     for i in 0..(quorum.quorum_size() - quorum.f()) {
@@ -155,7 +155,7 @@ fn simulate_echo(
             sender,
             ReliableBroadcastMessage::Echo(digest),
         );
-        rbc.process_message(echo_msg, &network);
+        rbc.process_message(echo_msg, network);
     }
 }
 
@@ -164,14 +164,14 @@ fn test_ready_phase_and_deliver() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(42);
 
     // Simulate SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -196,7 +196,7 @@ fn test_ready_phase_and_deliver() {
 
     let (requests, digest) = rbc.finalize().unwrap();
 
-    assert_eq!(requests.len(), 0, "No requests should be finalized");
+    assert_eq!(requests, 0, "No requests should be finalized");
     assert_eq!(digest, digest, "Digest should match the one sent");
 }
 
@@ -205,14 +205,14 @@ fn test_not_enough_echoes_no_ready() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(1);
 
     // SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -235,14 +235,14 @@ fn test_duplicate_echoes_ignored() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network =MockNetwork::new();
     let digest = make_digest(2);
 
     // SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -266,14 +266,14 @@ fn test_duplicate_readies_ignored() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(3);
 
     // SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -298,7 +298,7 @@ fn test_mismatched_digest_ignored() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(4);
     let wrong_digest = make_digest(99);
 
@@ -306,7 +306,7 @@ fn test_mismatched_digest_ignored() {
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg, &network);
 
@@ -330,14 +330,14 @@ fn test_send_after_proposed_ignored() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(5);
 
     // First SEND
     let send_msg = stored_msg(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(vec![], digest),
+        ReliableBroadcastMessage::Send(0, digest),
     );
     rbc.process_message(send_msg.clone(), &network);
 
@@ -354,7 +354,7 @@ fn test_echo_before_send_queued() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(6);
 
     // ECHO before SEND
@@ -372,7 +372,7 @@ fn test_ready_before_send_queued() {
     let quorum = quorum_info(N, F, NodeId(0));
     let sender = sender_from_quorum(&quorum);
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum.clone());
-    let network = Arc::new(MockNetwork::new());
+    let network = MockNetwork::new();
     let digest = make_digest(7);
 
     // READY before SEND

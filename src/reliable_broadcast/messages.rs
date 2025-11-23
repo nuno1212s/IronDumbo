@@ -4,7 +4,7 @@ use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub(crate) enum ReliableBroadcastMessage<RQ> {
-    Send(Vec<StoredMessage<RQ>>, Digest),
+    Send(RQ, Digest),
     Echo(Digest),
     Ready(Digest),
 }

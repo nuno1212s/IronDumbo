@@ -15,15 +15,16 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommitteeState::RunningCE(ce) => write!(f, "RunningCE({:?})", ce),
-            CommitteeState::Completed { committee } => write!(f, "Completed({:?})", committee),
+            CommitteeState::RunningCE(ce) => write!(f, "RunningCE({ce:?})"),
+            CommitteeState::Completed { committee } => write!(f, "Completed({committee:?})"),
         }
     }
 }
 
-/// The state of a node in the Dumbo protocol, distinguishing between committee and non-committee nodes.
+/// Our POV of the state of a given node in the dumbo protocol
 ///
 /// Committee nodes participate in both Value and Index RBC as well as having ABA protocol
+/// Non Committee nodes only partake in the ValueRBC
 pub(super) enum NodeState<RQ, VR, IR, A> {
     CommitteeNode(CommitteeNodeExecuting<VR, IR, A>, CommitteeNodeState<RQ>),
     NonCommitteeNode(NonCommitteeNodeExec<VR>, NonCommitteeNodeState<RQ>),
@@ -39,8 +40,8 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NodeState::CommitteeNode(state, ..) => write!(f, "CommitteeNode({:?})", state),
-            NodeState::NonCommitteeNode(state, ..) => write!(f, "NonCommitteeNode({:?})", state),
+            NodeState::CommitteeNode(state, ..) => write!(f, "CommitteeNode({state:?})"),
+            NodeState::NonCommitteeNode(state, ..) => write!(f, "NonCommitteeNode({state:?})"),
         }
     }
 }
@@ -63,24 +64,26 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommitteeNodeExecuting::RunningValueRBC(rbc) => write!(f, "RunningRBC({:?})", rbc),
+            CommitteeNodeExecuting::RunningValueRBC(rbc) => write!(f, "RunningRBC({rbc:?})"),
             CommitteeNodeExecuting::WaitingForRBCs => write!(f, "WaitingForRBCs"),
-            CommitteeNodeExecuting::RunningIndexRBC(rbc) => write!(f, "RunningIndexRBC({:?})", rbc),
+            CommitteeNodeExecuting::RunningIndexRBC(rbc) => write!(f, "RunningIndexRBC({rbc:?})"),
             CommitteeNodeExecuting::WaitingForValues => write!(f, "WaitingForValues"),
-            CommitteeNodeExecuting::RunningABA(aba) => write!(f, "RunningABA({:?})", aba),
+            CommitteeNodeExecuting::RunningABA(aba) => write!(f, "RunningABA({aba:?})"),
             CommitteeNodeExecuting::Done => write!(f, "Done"),
         }
     }
 }
 
 pub(super) enum CommitteeNodeState<RQ> {
-    Empty,
+    Empty(Option<bool>),
     ValueRBC {
         value: RQ,
+        pending_input: Option<bool>
     },
     IndexRBC {
         value: RQ,
         index: IndexType,
+        pending_input: Option<bool>,
     },
     ABA {
         value: RQ,
@@ -91,22 +94,26 @@ pub(super) enum CommitteeNodeState<RQ> {
 
 impl<RQ> CommitteeNodeState<RQ> {
     pub(super) fn received_value(&mut self, value: RQ) {
-        *self = CommitteeNodeState::ValueRBC { value };
+        *self = CommitteeNodeState::ValueRBC { value, pending_input: None };
     }
 
     pub(super) fn received_index(&mut self, index: IndexType) {
-        if let CommitteeNodeState::ValueRBC { value } =
-            std::mem::replace(self, CommitteeNodeState::Empty)
+        if let CommitteeNodeState::ValueRBC { value, pending_input } =
+            std::mem::replace(self, CommitteeNodeState::Empty(None))
         {
-            *self = CommitteeNodeState::IndexRBC { value, index };
+            *self = CommitteeNodeState::IndexRBC {
+                value,
+                index,
+                pending_input,
+            };
         } else {
             panic!("Invalid state transition: expected ValueRBC state");
         }
     }
 
     pub(super) fn received_decision(&mut self, decision: bool) {
-        if let CommitteeNodeState::IndexRBC { value, index } =
-            std::mem::replace(self, CommitteeNodeState::Empty)
+        if let CommitteeNodeState::IndexRBC { value, index, .. } =
+            std::mem::replace(self, CommitteeNodeState::Empty(None))
         {
             *self = CommitteeNodeState::ABA {
                 value,
@@ -117,28 +124,37 @@ impl<RQ> CommitteeNodeState<RQ> {
             panic!("Invalid state transition: expected IndexRBC state");
         }
     }
+    
+    pub(super) fn stored_pending_vote(&mut self, vote: bool) {
+        match self {
+            CommitteeNodeState::Empty(pending) => pending.insert(vote),
+            CommitteeNodeState::ValueRBC { pending_input, .. } => pending_input.insert(vote),
+            CommitteeNodeState::IndexRBC { pending_input, .. } => pending_input.insert(vote),
+            CommitteeNodeState::ABA { .. } => unreachable!("Invalid state transition: expected ValueRBC state"),
+        };
+    }
 }
 
 impl<RQ> Debug for CommitteeNodeState<RQ> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            CommitteeNodeState::Empty => write!(f, "Empty"),
-            CommitteeNodeState::ValueRBC { .. } => write!(f, "ValueRBC"),
-            CommitteeNodeState::IndexRBC { index, .. } => {
-                write!(f, "IndexRBC(index: {:?})", index)
+            CommitteeNodeState::Empty(pending) => write!(f, "Empty {pending:?}"),
+            CommitteeNodeState::ValueRBC { pending_input,.. } => write!(f, "ValueRBC {pending_input:?}"),
+            CommitteeNodeState::IndexRBC { index, pending_input, .. } => {
+                write!(f, "IndexRBC(index: {index:?}, pending_input: {pending_input:?})")
             }
             CommitteeNodeState::ABA {
                 index, decision, ..
             } => {
-                write!(f, "ABA(index: {:?}, decision: {:?})", index, decision)
+                write!(f, "ABA(index: {index:?}, decision: {decision:?})")
             }
         }
     }
 }
 
-impl<RQ > Default for CommitteeNodeState<RQ> {
+impl<RQ> Default for CommitteeNodeState<RQ> {
     fn default() -> Self {
-        CommitteeNodeState::Empty
+        CommitteeNodeState::Empty(None)
     }
 }
 
@@ -154,7 +170,7 @@ where
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            NonCommitteeNodeExec::RunningValueRBC(rbc) => write!(f, "RunningRBC({:?})", rbc),
+            NonCommitteeNodeExec::RunningValueRBC(rbc) => write!(f, "RunningRBC({rbc:?})"),
             NonCommitteeNodeExec::Completed => {
                 write!(f, "Completed")
             }
@@ -162,7 +178,9 @@ where
     }
 }
 
+#[derive(Default)]
 pub(super) enum NonCommitteeNodeState<RQ> {
+    #[default]
     Empty,
     ValueRBC { value: RQ },
 }
@@ -179,11 +197,5 @@ impl<RQ> Debug for NonCommitteeNodeState<RQ> {
             NonCommitteeNodeState::Empty => write!(f, "Empty"),
             NonCommitteeNodeState::ValueRBC { .. } => write!(f, "ValueRBC"),
         }
-    }
-}
-
-impl<RQ> Default for NonCommitteeNodeState<RQ> {
-    fn default() -> Self {
-        NonCommitteeNodeState::Empty
     }
 }
