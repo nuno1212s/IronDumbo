@@ -1,6 +1,5 @@
 use crate::aba::ABAProtocol;
 use crate::committee_election::CommitteeElectionProtocol;
-use crate::consensus_rqs::ConsensusRequest;
 use crate::dumbo1::config::Dumbo1Config;
 use crate::dumbo1::epoch::{DumboRound, EpochResult};
 use crate::dumbo1::message::DumboSerialization;

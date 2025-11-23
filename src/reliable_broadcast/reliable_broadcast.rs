@@ -9,7 +9,6 @@ use atlas_communication::message::StoredMessage;
 use getset::{Getters, MutGetters};
 use std::collections::VecDeque;
 use std::fmt::{Debug, Formatter};
-use std::sync::Arc;
 use thiserror::Error;
 use tracing::warn;
 
@@ -36,7 +35,8 @@ pub(super) struct ReliableBroadcastInstance<RQ> {
     #[get = ""]
     quorum_info: QuorumInfo,
     #[get = ""]
-    proposed_messages: Option<(RQ, Digest)>,
+    proposed_messages: Option<RQ>,
+    proposed_message_digest: Option<Digest>,
     #[get = ""]
     message_tracking: MessageTracking,
     #[get = ""]
@@ -54,6 +54,7 @@ where
             sender,
             quorum_info,
             proposed_messages: None,
+            proposed_message_digest: None,
             message_tracking: MessageTracking::default(),
             reliable_broadcast_state: ReliableBroadcastState::Init,
             pending_messages: PendingMessages::<RQ>::default(),
@@ -68,7 +69,7 @@ where
         }
     }
 
-    pub(super) fn poll(&mut self) -> Option<StoredMessage<ReliableBroadcastMessage<RQ>>> {
+    pub(super) fn poll_internal(&mut self) -> Option<StoredMessage<ReliableBroadcastMessage<RQ>>> {
         match self.reliable_broadcast_state {
             ReliableBroadcastState::Proposed => self.pending_messages.pop_echo(),
             ReliableBroadcastState::Echoed => self.pending_messages.pop_ready(),
@@ -76,16 +77,18 @@ where
         }
     }
 
-    fn propose_values<NT>(&mut self, network: &NT, value: RQ, digest: Digest)
+    fn propose_values<NT>(&mut self, network: &NT, value: RQ)
     where
         NT: ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>,
     {
+        self.proposed_messages = Some(value.clone());
 
-        self.proposed_messages = Some((value.clone(), digest.clone()));
+        let message = ReliableBroadcastMessage::Send(value);
 
-        let message = ReliableBroadcastMessage::Send(value, digest);
-
-        let _ = network.broadcast(message, self.quorum_info.quorum_members().clone().into_iter());
+        let _ = network.broadcast(
+            message,
+            self.quorum_info.quorum_members().clone().into_iter(),
+        );
     }
 
     /// Processes a message received from the network or queued in the pending messages.
@@ -100,64 +103,66 @@ where
         let (header, message) = sys_msg.clone().into_inner();
 
         match message {
-            ReliableBroadcastMessage::Send(messages, digest)
-            if self.proposed_messages.is_none()
-                && matches!(self.reliable_broadcast_state, ReliableBroadcastState::Init) =>
-                {
-                    self.proposed_messages = Some((messages, digest));
+            ReliableBroadcastMessage::Send(messages)
+                if self.proposed_messages.is_none()
+                    && matches!(self.reliable_broadcast_state, ReliableBroadcastState::Init) =>
+            {
+                let message_digest = *sys_msg.header().digest();
+                self.proposed_messages = Some(messages);
+                self.proposed_message_digest = Some(message_digest);
 
-                    self.broadcast_echo_message(digest, network);
+                self.broadcast_echo_message(message_digest, network);
 
-                    self.reliable_broadcast_state = ReliableBroadcastState::Proposed;
+                self.reliable_broadcast_state = ReliableBroadcastState::Proposed;
 
-                    ReliableBroadcastResult::Progressed(sys_msg)
-                }
-            ReliableBroadcastMessage::Send(_, _) => {
+                ReliableBroadcastResult::Progressed(sys_msg)
+            }
+            ReliableBroadcastMessage::Send(_) => {
                 warn!("Received a send message when already proposed messages exist, ignoring.");
 
                 ReliableBroadcastResult::MessageIgnored
             }
             ReliableBroadcastMessage::Echo(digest)
-            if self.get_current_digest() == Some(digest)
-                && matches!(
+                if self.get_current_digest() == Some(digest)
+                    && matches!(
                         self.reliable_broadcast_state,
                         ReliableBroadcastState::Proposed
                     ) =>
+            {
+                self.message_tracking.handle_received_echo(header.from());
+
+                if self.message_tracking.received_echoes().len()
+                    >= self.quorum_info().quorum_size() - self.quorum_info.f()
+                    && !self.message_tracking.sent_echo()
                 {
-                    self.message_tracking.handle_received_echo(header.from());
+                    self.reliable_broadcast_state = ReliableBroadcastState::Echoed;
+                    self.broadcast_ready_message(digest, network);
 
-                    if self.message_tracking.received_echoes().len()
-                        >= self.quorum_info().quorum_size() - self.quorum_info.f()
-                        && !self.message_tracking.sent_echo()
-                    {
-                        self.reliable_broadcast_state = ReliableBroadcastState::Echoed;
-                        self.broadcast_ready_message(digest, network);
-
-                        self.message_tracking.set_sent_echo();
-                    }
-
-                    ReliableBroadcastResult::Progressed(sys_msg)
+                    self.message_tracking.set_sent_echo();
                 }
+
+                ReliableBroadcastResult::Progressed(sys_msg)
+            }
             ReliableBroadcastMessage::Ready(digest)
-            if self.get_current_digest() == Some(digest)
-                && matches!(
+                if self.get_current_digest() == Some(digest)
+                    && matches!(
                         self.reliable_broadcast_state,
                         ReliableBroadcastState::Echoed
                     ) =>
+            {
+                self.message_tracking.handle_received_ready(header.from());
+
+                if self.message_tracking.received_readies().len() > 2 * self.quorum_info.f()
+                    && !self.message_tracking.sent_ready()
                 {
-                    self.message_tracking.handle_received_ready(header.from());
+                    self.reliable_broadcast_state = ReliableBroadcastState::Ready;
+                    self.message_tracking.set_sent_ready();
 
-                    if self.message_tracking.received_readies().len() > 2 * self.quorum_info.f()
-                        && !self.message_tracking.sent_ready()
-                    {
-                        self.reliable_broadcast_state = ReliableBroadcastState::Ready;
-                        self.message_tracking.set_sent_ready();
-
-                        return ReliableBroadcastResult::Finalized;
-                    }
-
-                    ReliableBroadcastResult::Progressed(sys_msg)
+                    return ReliableBroadcastResult::Finalized;
                 }
+
+                ReliableBroadcastResult::Progressed(sys_msg)
+            }
             _ => {
                 self.pending_messages.queue_message(sys_msg);
 
@@ -167,7 +172,7 @@ where
     }
 
     fn get_current_digest(&self) -> Option<Digest> {
-        self.proposed_messages.as_ref().map(|(_, digest)| *digest)
+        self.proposed_message_digest
     }
 
     fn broadcast_echo_message<NT>(&self, digest: Digest, network: &NT)
@@ -195,16 +200,77 @@ where
             warn!("Failed to broadcast ready message: {err:?}");
         }
     }
+}
 
-    pub(super) fn finalize(
-        self,
-    ) -> Result<(RQ, Digest), ReliableBroadcastError> {
+impl<RQ> ReliableBroadcast<RQ> for ReliableBroadcastInstance<RQ>
+where
+    RQ: SerMsg,
+{
+    type ReliableBroadcastMessage = ReliableBroadcastMessage<RQ>;
+    type Error = ReliableBroadcastError;
+
+    fn new(owner_id: NodeId, quorum_info: QuorumInfo) -> Self {
+        Self {
+            sender: owner_id,
+            quorum_info,
+            proposed_messages: None,
+            proposed_message_digest: None,
+            message_tracking: MessageTracking::default(),
+            reliable_broadcast_state: ReliableBroadcastState::Init,
+            pending_messages: PendingMessages::default(),
+        }
+    }
+
+    fn new_with_propose<NT>(
+        owner_id: NodeId,
+        quorum_info: QuorumInfo,
+        request: RQ,
+        network: &NT,
+    ) -> Self
+    where
+        NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>,
+    {
+        let mut rbc = Self::new(owner_id, quorum_info);
+
+        rbc.propose_values(network, request);
+
+        rbc
+    }
+
+    fn poll(&mut self) -> Option<StoredMessage<Self::ReliableBroadcastMessage>> {
+        self.poll_internal()
+    }
+
+    fn process_message<NT>(
+        &mut self,
+        message: StoredMessage<Self::ReliableBroadcastMessage>,
+        network: &NT,
+    ) -> Result<crate::rbc::ReliableBroadcastResult, Self::Error>
+    where
+        NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>,
+    {
+        let result = self.process_message(message, network);
+
+        Ok(match result {
+            ReliableBroadcastResult::MessageIgnored => {
+                crate::rbc::ReliableBroadcastResult::MessageIgnored
+            }
+            ReliableBroadcastResult::MessageQueued => {
+                crate::rbc::ReliableBroadcastResult::MessageQueued
+            }
+            ReliableBroadcastResult::Progressed(_) => {
+                crate::rbc::ReliableBroadcastResult::Processed
+            }
+            ReliableBroadcastResult::Finalized => crate::rbc::ReliableBroadcastResult::Finalized,
+        })
+    }
+
+    fn finalize(self) -> Result<(RQ, Digest), Self::Error> {
         if matches!(self.reliable_broadcast_state, ReliableBroadcastState::Ready) {
             // We can finalize the broadcast
-            if let Some((messages, digest)) = self.proposed_messages {
-                Ok((messages, digest))
-            } else {
-                Err(ReliableBroadcastError::NoProposedMessages)
+            match (self.proposed_messages, self.proposed_message_digest) {
+                (Some(messages), Some(digest)) => Ok((messages, digest)),
+                _ => Err(ReliableBroadcastError::NoProposedMessages),
             }
         } else {
             warn!(
@@ -318,58 +384,4 @@ pub enum ReliableBroadcastError {
     NoProposedMessages,
     #[error("Reliable broadcast instance is not ready to finalize")]
     NotReadyToFinalize,
-}
-
-impl<RQ> ReliableBroadcast<RQ> for ReliableBroadcastInstance<RQ>
-where
-    RQ: SerMsg,
-{
-    type ReliableBroadcastMessage = ReliableBroadcastMessage<RQ>;
-    type Error = ReliableBroadcastError;
-
-    fn new(owner_id: NodeId, quorum_info: QuorumInfo) -> Self {
-        Self {
-            sender: owner_id,
-            quorum_info,
-            proposed_messages: None,
-            message_tracking: MessageTracking::default(),
-            reliable_broadcast_state: ReliableBroadcastState::Init,
-            pending_messages: PendingMessages::default(),
-        }
-    }
-
-    fn new_with_propose<NT>(
-        owner_id: NodeId,
-        quorum_info: QuorumInfo,
-        request: (RQ, Digest),
-        network: &NT,
-    ) -> Self
-    where
-        NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>,
-    {
-        let mut rbc = Self::new(owner_id, quorum_info);
-        
-        rbc.propose_values(network, request.0, request.1);
-        
-        rbc
-    }
-
-    fn poll(&mut self) -> Option<Self::ReliableBroadcastMessage> {
-        todo!()
-    }
-
-    fn process_message<NT>(
-        &mut self,
-        message: StoredMessage<Self::ReliableBroadcastMessage>,
-        network: &NT,
-    ) -> Result<crate::rbc::ReliableBroadcastResult, Self::Error>
-    where
-        NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>,
-    {
-        todo!()
-    }
-
-    fn finalize(self) -> Result<RQ, Self::Error> {
-        todo!()
-    }
 }

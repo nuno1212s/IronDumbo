@@ -1,5 +1,5 @@
 use crate::quorum_info::quorum_info::QuorumInfo;
-use crate::rbc::ReliableBroadcastSendNode;
+use crate::rbc::{ReliableBroadcast, ReliableBroadcastSendNode};
 use crate::reliable_broadcast::messages::ReliableBroadcastMessage;
 use crate::reliable_broadcast::reliable_broadcast::{
     ReliableBroadcastInstance, ReliableBroadcastResult,
@@ -74,7 +74,7 @@ fn make_digest(val: MsgType) -> Digest {
 fn stored_msg(
     from: NodeId,
     to: NodeId,
-    msg: ReliableBroadcastMessage<MsgType>,
+    msg: ReliableBroadcastMessage<MsgType>
 ) -> StoredMessage<ReliableBroadcastMessage<MsgType>> {
     let wire_msg = atlas_communication::message::WireMessage::new(
         from,
@@ -83,6 +83,25 @@ fn stored_msg(
         Buf::new(),
         0,
         Some(Digest::blank()),
+        None,
+    );
+
+    StoredMessage::new(wire_msg.header().clone(), msg)
+}
+
+fn stored_msg_digest(
+    from: NodeId,
+    to: NodeId,
+    msg: ReliableBroadcastMessage<MsgType>,
+    digest: Option<Digest>,
+) -> StoredMessage<ReliableBroadcastMessage<MsgType>> {
+    let wire_msg = atlas_communication::message::WireMessage::new(
+        from,
+        to,
+        MessageModule::Application,
+        Buf::new(),
+        0, 
+        Some(digest.unwrap_or(Digest::blank())),
         None,
     );
 
@@ -99,10 +118,11 @@ fn test_send_phase() {
     let mut rbc = ReliableBroadcastInstance::<MsgType>::new(sender, quorum);
     let network = MockNetwork::new();
     let digest = make_digest(42);
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
 
     // Process SEND
@@ -122,10 +142,11 @@ fn test_echo_phase() {
     let digest = make_digest(42);
 
     // Simulate SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -168,10 +189,11 @@ fn test_ready_phase_and_deliver() {
     let digest = make_digest(42);
 
     // Simulate SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -209,10 +231,11 @@ fn test_not_enough_echoes_no_ready() {
     let digest = make_digest(1);
 
     // SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -239,10 +262,11 @@ fn test_duplicate_echoes_ignored() {
     let digest = make_digest(2);
 
     // SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -270,10 +294,11 @@ fn test_duplicate_readies_ignored() {
     let digest = make_digest(3);
 
     // SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -303,10 +328,11 @@ fn test_mismatched_digest_ignored() {
     let wrong_digest = make_digest(99);
 
     // SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg, &network);
 
@@ -334,10 +360,11 @@ fn test_send_after_proposed_ignored() {
     let digest = make_digest(5);
 
     // First SEND
-    let send_msg = stored_msg(
+    let send_msg = stored_msg_digest(
         sender,
         sender,
-        ReliableBroadcastMessage::Send(0, digest),
+        ReliableBroadcastMessage::Send(0),
+        Some(digest)
     );
     rbc.process_message(send_msg.clone(), &network);
 

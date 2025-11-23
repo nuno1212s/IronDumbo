@@ -265,7 +265,8 @@ where
     {
         let network = SendNodeWrapperRef::new(seq_no, quorum_info.own_node_id(), network);
 
-        let rbc = VR::new_with_propose(quorum_info.own_node_id(), quorum_info, requests, &network);
+        let rbc =
+            VR::new_with_propose(quorum_info.own_node_id(), quorum_info, requests.0, &network);
 
         Self::init_node_state_for(rbc, is_committee_node)
     }
@@ -396,13 +397,13 @@ where
                             unreachable!("Checked above that we are in RunningValueRBC state");
                         };
 
-                        let value_rbc = rbc.finalize()?;
+                        let (value_rbc, _) = rbc.finalize()?;
 
-                        let contained_requests = value_rbc.get_client_rq_info();
+                        let contained_rqs = value_rbc.get_client_rq_info();
 
                         committee_node_state.received_value(value_rbc);
 
-                        contained_requests
+                        contained_rqs
                     }
                     NodeState::NonCommitteeNode(
                         non_committee_node_exec,
@@ -417,7 +418,7 @@ where
                             unreachable!("Checked above that we are in RunningValueRBC state");
                         };
 
-                        let completed_rbc = rbc.finalize()?;
+                        let (completed_rbc, _) = rbc.finalize()?;
 
                         let contained_requests = completed_rbc.get_client_rq_info();
 
@@ -495,7 +496,7 @@ where
                         unreachable!("Checked above that we are in RunningValueRBC state");
                     };
 
-                    let index_rbc = rbc.finalize()?;
+                    let (index_rbc, _) = rbc.finalize()?;
 
                     committee_node_state.received_index(index_rbc.clone());
 
@@ -788,7 +789,12 @@ where
 
     fn committee_nodes(
         &self,
-    ) -> impl Iterator<Item = (&CommitteeNodeExecuting<VR, IR, A>, &CommitteeNodeState<DumboRQ<RQ>>)> {
+    ) -> impl Iterator<
+        Item = (
+            &CommitteeNodeExecuting<VR, IR, A>,
+            &CommitteeNodeState<DumboRQ<RQ>>,
+        ),
+    > {
         self.committee
             .iter()
             .filter_map(|node_id| self.node_states.get(node_id))
@@ -1015,13 +1021,6 @@ enum ABAPreparationError<A> {
     NotPartOfCommittee,
     #[error("Node is not in the correct state to prepare ABA")]
     ABAError(#[from] A),
-}
-
-/// Error when checking if the node is part of the committee
-#[derive(Debug, Error)]
-pub(super) enum CheckNodeStateError {
-    #[error("Committee election protocol not completed yet")]
-    CommitteeNotCompleted,
 }
 
 #[derive(Debug, Error)]
