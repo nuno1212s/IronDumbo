@@ -78,7 +78,7 @@ pub(super) enum CommitteeNodeState<RQ> {
     Empty(Option<bool>),
     ValueRBC {
         value: RQ,
-        pending_input: Option<bool>
+        pending_input: Option<bool>,
     },
     IndexRBC {
         value: RQ,
@@ -94,12 +94,17 @@ pub(super) enum CommitteeNodeState<RQ> {
 
 impl<RQ> CommitteeNodeState<RQ> {
     pub(super) fn received_value(&mut self, value: RQ) {
-        *self = CommitteeNodeState::ValueRBC { value, pending_input: None };
+        *self = CommitteeNodeState::ValueRBC {
+            value,
+            pending_input: None,
+        };
     }
 
     pub(super) fn received_index(&mut self, index: IndexType) {
-        if let CommitteeNodeState::ValueRBC { value, pending_input } =
-            std::mem::replace(self, CommitteeNodeState::Empty(None))
+        if let CommitteeNodeState::ValueRBC {
+            value,
+            pending_input,
+        } = std::mem::replace(self, CommitteeNodeState::Empty(None))
         {
             *self = CommitteeNodeState::IndexRBC {
                 value,
@@ -124,13 +129,15 @@ impl<RQ> CommitteeNodeState<RQ> {
             panic!("Invalid state transition: expected IndexRBC state");
         }
     }
-    
+
     pub(super) fn stored_pending_vote(&mut self, vote: bool) {
         match self {
             CommitteeNodeState::Empty(pending) => pending.insert(vote),
-            CommitteeNodeState::ValueRBC { pending_input, .. } => pending_input.insert(vote),
-            CommitteeNodeState::IndexRBC { pending_input, .. } => pending_input.insert(vote),
-            CommitteeNodeState::ABA { .. } => unreachable!("Invalid state transition: expected ValueRBC state"),
+            CommitteeNodeState::ValueRBC { pending_input, .. }
+            | CommitteeNodeState::IndexRBC { pending_input, .. } => pending_input.insert(vote),
+            CommitteeNodeState::ABA { .. } => {
+                unreachable!("Invalid state transition: expected ValueRBC state")
+            }
         };
     }
 }
@@ -139,9 +146,18 @@ impl<RQ> Debug for CommitteeNodeState<RQ> {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             CommitteeNodeState::Empty(pending) => write!(f, "Empty {pending:?}"),
-            CommitteeNodeState::ValueRBC { pending_input,.. } => write!(f, "ValueRBC {pending_input:?}"),
-            CommitteeNodeState::IndexRBC { index, pending_input, .. } => {
-                write!(f, "IndexRBC(index: {index:?}, pending_input: {pending_input:?})")
+            CommitteeNodeState::ValueRBC { pending_input, .. } => {
+                write!(f, "ValueRBC {pending_input:?}")
+            }
+            CommitteeNodeState::IndexRBC {
+                index,
+                pending_input,
+                ..
+            } => {
+                write!(
+                    f,
+                    "IndexRBC(index: {index:?}, pending_input: {pending_input:?})"
+                )
             }
             CommitteeNodeState::ABA {
                 index, decision, ..
@@ -182,7 +198,9 @@ where
 pub(super) enum NonCommitteeNodeState<RQ> {
     #[default]
     Empty,
-    ValueRBC { value: RQ },
+    ValueRBC {
+        value: RQ,
+    },
 }
 
 impl<RQ> NonCommitteeNodeState<RQ> {

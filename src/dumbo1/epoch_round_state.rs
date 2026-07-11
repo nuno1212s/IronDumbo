@@ -218,7 +218,7 @@ where
                     Self::init_other_node_state_for(
                         *node_id,
                         committee.contains(node_id),
-                        quorum_info.clone(),
+                        quorum_info,
                     ),
                 )
             })
@@ -245,7 +245,7 @@ where
     fn init_other_node_state_for(
         node_id: NodeId,
         is_committee_node: bool,
-        quorum_info: QuorumInfo,
+        quorum_info: &QuorumInfo,
     ) -> NodeState<DumboRQ<RQ>, VR, IR, A> {
         let rbc = VR::new(node_id, quorum_info.clone());
 
@@ -435,6 +435,10 @@ where
                 EpochResult::MessageProcessed
             }
         })
+    }
+
+    fn handle_value_rbc_finished(&mut self, owner_id: NodeId) {
+        if self.is_part_of_committee(owner_id) {}
     }
 
     pub(super) fn process_index_rbc_message<NT, CE>(
@@ -637,9 +641,10 @@ where
                     unreachable!("Checked above that we are in RunningABA state");
                 };
 
-                let CommitteeNodeExecuting::RunningABA(aba) =
-                    std::mem::replace(committee_node_exec, CommitteeNodeExecuting::Done)
-                else {
+                let aba_state =
+                    std::mem::replace(committee_node_exec, CommitteeNodeExecuting::Done);
+
+                let CommitteeNodeExecuting::RunningABA(aba) = aba_state else {
                     unreachable!("Checked above that we are in RunningABA state");
                 };
 
@@ -648,6 +653,9 @@ where
                 committee_node_state.received_decision(protocol_result);
 
                 if protocol_result {
+                    // When we have finalized 1 of the running ABAs with a
+                    // Positive outcome (included) then we want to send
+                    // Input of 1 to all others which are not yet completed
                     self.send_negative_input_to_all_pending_aba(network)?;
                 }
 
@@ -669,10 +677,11 @@ where
                 .collect::<Vec<_>>();
 
             if missing_values.is_empty() {
-            } else {
-                self.client_request_tracker
-                    .register_missing_values(owner_id, missing_values.as_slice());
+                return Ok(EpochResult::Finalized);
             }
+
+            self.client_request_tracker
+                .register_missing_values(owner_id, missing_values.as_slice());
         }
 
         Ok(epoch_result)
@@ -756,7 +765,9 @@ where
 
         match node {
             NodeState::CommitteeNode(executing, round_state) => match executing {
-                CommitteeNodeExecuting::RunningValueRBC(_) => {}
+                CommitteeNodeExecuting::RunningValueRBC(_) => {
+                    todo!()
+                }
                 CommitteeNodeExecuting::WaitingForRBCs => {}
                 CommitteeNodeExecuting::RunningIndexRBC(_) => {}
                 CommitteeNodeExecuting::WaitingForValues => {}
@@ -807,7 +818,7 @@ where
             })
     }
 
-    fn completed_rbc_count(&self) -> usize {
+    fn completed_value_rbc_count(&self) -> usize {
         self.node_states
             .iter()
             .filter(|(_, state)| match state {
@@ -833,7 +844,7 @@ where
             return false;
         }
 
-        self.completed_rbc_count() >= quorum_info.quorum_size()
+        self.completed_value_rbc_count() >= quorum_info.quorum_size()
     }
 
     fn check_all_committee_nodes_finished(&self) -> bool {
