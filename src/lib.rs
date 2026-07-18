@@ -27,22 +27,76 @@ mod async_bin_agreement {
     pub mod test {
         pub mod async_bin_agreement_test;
         pub mod message_handling_test;
+        pub mod multi_node_test;
     }
 }
 
 pub mod aba;
-pub mod rbc;
-mod rq_aggregator;
 mod committee_election;
 mod consensus_rqs;
+pub mod mvba;
+pub mod prbc;
+pub mod rbc;
+mod rq_aggregator;
+
+mod provable_reliable_broadcast {
+    pub mod messages;
+    pub mod provable_reliable_broadcast;
+
+    #[cfg(test)]
+    pub mod test {
+        pub mod prbc_test;
+    }
+}
+
+mod multi_valued_byzantine_agreement {
+    pub mod messages;
+    pub mod mvba;
+
+    #[cfg(test)]
+    pub mod test {
+        pub mod mvba_test;
+    }
+}
+
+#[cfg(test)]
+mod testing {
+    pub mod assertions;
+    pub mod byzantine;
+    pub mod fixtures;
+    pub mod network_sim;
+}
 
 pub mod dumbo1 {
-    pub mod protocol;
+    mod config;
     mod epoch;
     mod epoch_round_state;
-    mod node_states;
     mod message;
     mod network;
+    mod node_states;
     mod pending_messages;
+    pub mod protocol;
+
+    #[cfg(test)]
+    pub mod test {
+        pub mod dumbo1_integration_test;
+        pub mod harness;
+    }
+}
+
+pub mod dumbo2 {
     mod config;
+    mod epoch;
+    mod epoch_round_state;
+    mod message;
+    mod network;
+    mod node_states;
+    mod pending_messages;
+    pub mod protocol;
+
+    #[cfg(test)]
+    pub mod test {
+        pub mod dumbo2_integration_test;
+        pub mod harness;
+    }
 }

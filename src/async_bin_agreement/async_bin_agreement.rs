@@ -14,7 +14,7 @@ use thiserror::Error;
 /// It contains the current round, the input bit, the quorum information,
 /// the current round data, the previous rounds, and the pending messages.
 #[derive(Debug, Getters, CopyGetters)]
-pub(super) struct AsyncBinaryAgreement {
+pub(crate) struct AsyncBinaryAgreement {
     #[get_copy = "pub"]
     round: usize,
     input_bit: Option<bool>,
@@ -61,8 +61,25 @@ impl AsyncBinaryAgreement {
         match result {
             RoundDataVoteAcceptResult::Accepted => AsyncBinaryAgreementResult::Processed,
             RoundDataVoteAcceptResult::Failed(next_estimate) => {
-                // If we are in a failed state, we move to the next round
+                // If we are in a failed state, we move to the next round, and must
+                // broadcast our estimate for it: nobody else will vote in the new
+                // round otherwise, since RoundData::new does not do this itself.
                 self.advance_round(next_estimate);
+
+                let est_message = AsyncBinaryAgreementMessage::new(
+                    AsyncBinaryAgreementMessageType::Val {
+                        estimate: next_estimate,
+                    },
+                    self.round,
+                );
+
+                network
+                    .broadcast_message(
+                        est_message,
+                        self.quorum_info.quorum_members().iter().cloned(),
+                    )
+                    .expect("Failed to broadcast estimate message");
+
                 AsyncBinaryAgreementResult::Processed
             }
             RoundDataVoteAcceptResult::Finalized(result) => {
@@ -140,7 +157,8 @@ impl AsyncBinaryAgreement {
             }
             RoundDataVoteAcceptResult::Queue if message.is_some() => {
                 // If we are collecting echoes, we queue the message for later processing
-                self.pending_messages.add_message(self.round, message.unwrap());
+                self.pending_messages
+                    .add_message(self.round, message.unwrap());
                 AsyncBinaryAgreementResult::MessageQueued
             }
             RoundDataVoteAcceptResult::Ignored | RoundDataVoteAcceptResult::AlreadyAccepted | _ => {
@@ -154,10 +172,7 @@ impl ABAProtocol for AsyncBinaryAgreement {
     type AsyncBinaryMessage = AsyncBinaryAgreementMessage;
     type ABAError = ABAError;
 
-    fn new(
-        quorum_info: QuorumInfo,
-        threshold_keys: ThresholdKeys,
-    ) -> Self {
+    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys) -> Self {
         let f = quorum_info.f();
 
         Self {
@@ -172,7 +187,11 @@ impl ABAProtocol for AsyncBinaryAgreement {
         }
     }
 
-    fn provide_input_bit<NT>(&mut self, input_bit: bool, network: &NT) -> Result<AsyncBinaryAgreementResult, Self::ABAError>
+    fn provide_input_bit<NT>(
+        &mut self,
+        input_bit: bool,
+        network: &NT,
+    ) -> Result<AsyncBinaryAgreementResult, Self::ABAError>
     where
         NT: AsyncBinaryAgreementSendNode<Self::AsyncBinaryMessage>,
     {

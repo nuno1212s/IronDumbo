@@ -1,10 +1,9 @@
-use crate::aba::ABAProtocol;
-use crate::committee_election::CommitteeElectionProtocol;
-use crate::dumbo1::config::Dumbo1Config;
-use crate::dumbo1::epoch::{DumboRound, EpochResult};
-use crate::dumbo1::message::DumboSerialization;
+use crate::dumbo2::config::Dumbo2Config;
+use crate::dumbo2::epoch::{Dumbo2Round, EpochResult};
+use crate::dumbo2::message::{Dumbo2MessageType, Dumbo2Serialization};
+use crate::mvba::MVBAProtocol;
+use crate::prbc::PRBCProtocol;
 use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
-use crate::rbc::ReliableBroadcast;
 use crate::rq_aggregator::RequestAggregator;
 use atlas_common::Err;
 use atlas_common::crypto::hash::Context;
@@ -33,93 +32,50 @@ use std::sync::{Arc, LazyLock};
 use thiserror::Error;
 use tracing::warn;
 
-/// The name of the Dumbo1 module.
-/// Used for logging and metrics.
-static DUMBO1_MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Dumbo1"));
+static DUMBO2_MOD_NAME: LazyLock<Arc<str>> = LazyLock::new(|| Arc::from("Dumbo2"));
 
-pub type IndexType = (NodeId, Vec<ClientRqInfo>);
-
-/// Since we want Dumbo to support batching, and we don't want to complicate the design of the
-/// Actual individual protocols (RBC, ABA) we need to short circuit this definition.
-/// I still have to work on an Atlas level solution to allow for all protocols to be usable
-/// with single requests or batched requests
+/// As in Dumbo1: batch support without complicating the individual
+/// sub-protocols (PRBC), which broadcast a single opaque value.
 pub(super) type DumboRQ<RQ> = Vec<StoredMessage<RQ>>;
 
-pub(super) type ShareableDumboPMessage<
-    RQ,
-    R: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-> = ShareableConsensusMessage<RQ, DumboPSerialization<RQ, R, IR, A, CE>>;
+pub(super) type ShareableDumbo2PMessage<RQ, PR, MV> =
+    ShareableConsensusMessage<RQ, Dumbo2PSerialization<RQ, PR, MV>>;
 
-pub type DumboPSerialization<
+pub type Dumbo2PSerialization<RQ, PR, MV> = Dumbo2Serialization<
     RQ,
-    R: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-> = DumboSerialization<
-    RQ,
-    R::ReliableBroadcastMessage,
-    IR::ReliableBroadcastMessage,
-    A::AsyncBinaryMessage,
-    CE::Message,
+    <PR as PRBCProtocol<DumboRQ<RQ>>>::Message,
+    <MV as MVBAProtocol>::Message,
 >;
 
-#[allow(dead_code)]
-pub(super) type DumboPMessage<
-    RQ: 'static,
-    VR: ReliableBroadcast<RQ>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-> = <DumboPSerialization<RQ, VR, IR, A, CE> as OrderingProtocolMessage<RQ>>::ProtocolMessage;
-
-/// An instance of the Dumbo protocol.
-/// Holds the state of the protocol for a specific epoch.
-/// Tracks the state of each node in the protocol.
+/// An instance of the Dumbo2 protocol: PRBC + MVBA, without the
+/// committee-election / IndexRBC machinery Dumbo1 uses.
 #[derive(Getters, Setters)]
-pub struct Dumbo<CE, RQ, VR, IR, A, NT>
+pub struct Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
 {
-    // The current epoch number.
     epoch_num: SeqNo,
-
-    // The current quorum information
     quorum_info: QuorumInfo,
-    // The threshold keys for the current quorum.
     threshold_keys: ThresholdKeys,
-    // The watermark for the number of rounds to keep in memory.
     watermark: usize,
-
     request_aggregator: Arc<RequestAggregator<RQ>>,
-
     network: Arc<NT>,
-    // The rounds of the dumbo protocol.
-    rounds: VecDeque<DumboRound<CE, RQ, VR, IR, A>>,
+    rounds: VecDeque<Dumbo2Round<RQ, PR, MV>>,
 }
 
-impl<CE, RQ, VR, IR, A, NT> OrderProtocolTolerance for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, NT> OrderProtocolTolerance for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    RQ: SerMsg,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
 {
     fn get_n_for_f(f: usize) -> usize {
         3 * f + 1
     }
 
     fn get_quorum_for_n(n: usize) -> usize {
-        // n = 2f + 1
         (n - 1) / 2
     }
 
@@ -128,67 +84,62 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A, NT> Orderable for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, NT> Orderable for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    RQ: SerMsg,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
 {
     fn sequence_number(&self) -> SeqNo {
         self.epoch_num
     }
 }
 
-impl<CE, RQ, VR, IR, A, NT> TimeoutableMod<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>>
-    for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, NT> TimeoutableMod<OPExResult<RQ, Dumbo2PSerialization<RQ, PR, MV>>>
+    for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    RQ: SerMsg,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
 {
     fn mod_name() -> Arc<str> {
-        DUMBO1_MOD_NAME.clone()
+        DUMBO2_MOD_NAME.clone()
     }
 
     fn handle_timeout(
         &mut self,
-        timeout: Vec<ModTimeout>,
-    ) -> Result<OPExResult<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>> {
+        _timeout: Vec<ModTimeout>,
+    ) -> Result<OPExResult<RQ, Dumbo2PSerialization<RQ, PR, MV>>> {
+        // Not yet implemented, matching Dumbo1's own current scope.
         todo!()
     }
 }
 
-impl<CE, RQ, VR, IR, A, NT> OrderingProtocol<RQ> for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, NT> OrderingProtocol<RQ> for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
+    NT: OrderProtocolSendNode<RQ, Dumbo2PSerialization<RQ, PR, MV>>,
 {
-    type Serialization = DumboPSerialization<RQ, VR, IR, A, CE>;
-    type Config = Dumbo1Config;
+    type Serialization = Dumbo2PSerialization<RQ, PR, MV>;
+    type Config = Dumbo2Config;
 
     fn handle_off_ctx_message(
         &mut self,
-        message: ShareableConsensusMessage<RQ, Self::Serialization>,
+        _message: ShareableConsensusMessage<RQ, Self::Serialization>,
     ) {
+        // Not yet implemented, matching Dumbo1's own current scope.
         todo!()
     }
 
-    fn handle_execution_changed(&mut self, is_executing: bool) -> Result<()> {
+    fn handle_execution_changed(&mut self, _is_executing: bool) -> Result<()> {
+        // Not yet implemented, matching Dumbo1's own current scope.
         todo!()
     }
 
     fn poll(&mut self) -> Result<OPResult<RQ, Self::Serialization>> {
-        let polled_message = self.rounds.front_mut().map(|round| round.poll()).flatten();
+        let polled_message = self.rounds.front_mut().and_then(|round| round.poll());
 
         match polled_message {
             None => Ok(OPPollResult::ReceiveMsg),
@@ -205,7 +156,11 @@ where
         match message_seq_no.index(self.epoch_num) {
             Either::Left(_) => Ok(OPExecResult::MessageDropped),
             Either::Right(index) => {
-                let result = self.rounds[index].process_message(message.clone(), &self.network)?;
+                let Some(round) = self.rounds.get_mut(index) else {
+                    return Ok(OPExecResult::MessageDropped);
+                };
+
+                let result = round.process_message(message.clone(), &self.network)?;
 
                 match result {
                     EpochResult::MessageIgnored => Ok(OPExecResult::MessageDropped),
@@ -223,12 +178,15 @@ where
                     EpochResult::Finalized => {
                         let final_data = self.rounds[index].take_final_data()?;
 
-                        let requests = final_data.requests().clone();
-                        let client_rqs = final_data
-                            .indexes()
+                        let requests: Vec<StoredMessage<RQ>> =
+                            final_data.values().iter().flatten().cloned().collect();
+                        let client_rqs: Vec<ClientRqInfo> = final_data
+                            .included()
                             .iter()
-                            .flat_map(|(_, rqs)| rqs.iter().cloned())
-                            .collect::<Vec<_>>();
+                            .map(|(owner, digest, _)| {
+                                ClientRqInfo::new(*digest, *owner, self.epoch_num, self.epoch_num)
+                            })
+                            .collect();
 
                         let mut digest_ctx = Context::new();
                         requests
@@ -287,11 +245,17 @@ where
                 let mut current_round_generated_count = 0;
 
                 while self.rounds.len() <= self.watermark {
-                    let new_round = DumboRound::new(
-                        self.epoch_num + SeqNo::from(current_round_generated_count),
+                    let round_seq = self.epoch_num + SeqNo::from(current_round_generated_count);
+
+                    let (batch, _digest) = self.request_aggregator.get_batch_and_reset();
+
+                    let new_round = Dumbo2Round::new(
+                        round_seq,
                         self.quorum_info.clone(),
                         self.threshold_keys.clone(),
+                        batch,
                         self.request_aggregator.clone(),
+                        &self.network,
                     );
 
                     self.rounds.push_back(new_round);
@@ -304,15 +268,12 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A, RP, NT> NetworkedOrderProtocolInitializer<RQ, RP, NT>
-    for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, RP, NT> NetworkedOrderProtocolInitializer<RQ, RP, NT> for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
-    NT: OrderProtocolSendNode<RQ, DumboPSerialization<RQ, VR, IR, A, CE>>,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
+    NT: OrderProtocolSendNode<RQ, Dumbo2PSerialization<RQ, PR, MV>>,
 {
     fn initialize(
         config: Self::Config,
@@ -321,7 +282,7 @@ where
     where
         Self: Sized,
     {
-        let Dumbo1Config { threshold_keys } = config;
+        let Dumbo2Config { threshold_keys } = config;
 
         let OrderingProtocolArgs(node_id, _timeout_mod, _rq_pp, batch_output, network, nodes) =
             order_protocol_args;
@@ -342,18 +303,16 @@ where
     }
 }
 
-impl<CE, RQ, VR, IR, A, NT> Debug for Dumbo<CE, RQ, VR, IR, A, NT>
+impl<RQ, PR, MV, NT> Debug for Dumbo2<RQ, PR, MV, NT>
 where
     RQ: SerMsg + SessionBased + Debug,
-    VR: ReliableBroadcast<DumboRQ<RQ>>,
-    IR: ReliableBroadcast<IndexType>,
-    A: ABAProtocol,
-    CE: CommitteeElectionProtocol,
+    PR: PRBCProtocol<DumboRQ<RQ>>,
+    MV: MVBAProtocol,
 {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         write!(
             f,
-            "Dumbo(epoch_num: {:?}, rounds: {:?})",
+            "Dumbo2(epoch_num: {:?}, rounds: {:?})",
             self.epoch_num, self.rounds
         )
     }

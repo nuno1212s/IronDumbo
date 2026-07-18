@@ -16,8 +16,7 @@ pub trait ABAProtocol: Debug {
     type AsyncBinaryMessage: SerMsg;
     type ABAError: Error + Send + Sync + 'static;
 
-    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys)
-    -> Self;
+    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys) -> Self;
 
     /// Attempts to provide the input bit for the protocol.
     ///

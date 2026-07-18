@@ -1,7 +1,7 @@
 use crate::aba::ABAProtocol;
 use crate::committee_election::{CommitteeElectionProtocol, CommitteeElectionResult};
 use crate::dumbo1::epoch_round_state::{
-    CommitteeElectionState, DumboRoundState, RoundDataArguments,
+    CommitteeElectionState, DumboRoundState, RoundDataArguments, RoundFinalData,
 };
 use crate::dumbo1::message::DumboMessageType;
 use crate::dumbo1::pending_messages::PendingMessages;
@@ -141,14 +141,13 @@ where
 
                             let requests = self.request_aggregator.get_batch_and_reset();
 
-                            self.round_state =
-                                DumboRoundState::new_running(
-                                    self.sequence_number(),
-                                    committee,
-                                    self.quorum_info(),
-                                    requests,
-                                    network,
-                                );
+                            self.round_state = DumboRoundState::new_running(
+                                self.sequence_number(),
+                                committee,
+                                self.quorum_info(),
+                                requests,
+                                network,
+                            );
 
                             Ok(EpochResult::MessageProcessed)
                         }
@@ -201,6 +200,17 @@ where
             DumboRoundState::Done(..) => Ok(EpochResult::MessageIgnored),
         }
     }
+
+    /// Consumes the round's final data once it has reported [`EpochResult::Finalized`],
+    /// transitioning it to `Done`.
+    pub(super) fn take_final_data(&mut self) -> error::Result<RoundFinalData<RQ>> {
+        Ok(self.round_state.take_final_data()?)
+    }
+
+    /// See [`crate::dumbo1::epoch_round_state::RoundStateParts::all_value_rbcs_complete`].
+    pub(super) fn all_value_rbcs_complete(&self) -> bool {
+        self.round_state.all_value_rbcs_complete()
+    }
 }
 
 impl<CE, RQ, VR, IR, A> Debug for DumboRound<CE, RQ, VR, IR, A>
@@ -221,6 +231,7 @@ where
     }
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) enum EpochResult {
     MessageIgnored,
     MessageQueued,

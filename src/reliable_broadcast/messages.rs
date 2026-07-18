@@ -11,10 +11,7 @@ pub(crate) enum ReliableBroadcastMessage<RQ> {
 impl<RQ> PartialEq for ReliableBroadcastMessage<RQ> {
     fn eq(&self, other: &Self) -> bool {
         match (self, other) {
-            (
-                ReliableBroadcastMessage::Send(_),
-                ReliableBroadcastMessage::Send(_),
-            ) => false,
+            (ReliableBroadcastMessage::Send(_), ReliableBroadcastMessage::Send(_)) => false,
             (ReliableBroadcastMessage::Echo(d1), ReliableBroadcastMessage::Echo(d2)) => d1 == d2,
             (ReliableBroadcastMessage::Ready(d1), ReliableBroadcastMessage::Ready(d2)) => d1 == d2,
             _ => false,

@@ -1,3 +1,4 @@
+use atlas_common::node_id::NodeId;
 use atlas_common::ordering::{Orderable, SeqNo};
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::Header;
@@ -9,7 +10,6 @@ use getset::Getters;
 use serde::{Deserialize, Serialize};
 use std::marker::PhantomData;
 use std::sync::Arc;
-use atlas_common::node_id::NodeId;
 use strum_macros::{EnumDiscriminants, EnumIter};
 
 /// A message used in the Dumbo1 protocol.
@@ -78,6 +78,9 @@ where
         OPVH: OrderProtocolVerificationHelper<RQ, Self, NI>,
         Self: Sized,
     {
-        todo!()
+        // Message authenticity is already established by the signed envelope
+        // (Header::digest / signature) verified below this layer; the Dumbo1
+        // message types carry no further semantic invariants to check here.
+        Ok(())
     }
 }

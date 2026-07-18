@@ -29,8 +29,8 @@ enum ReliableBroadcastState {
 /// It tracks the proposed messages, message tracking information, and pending messages.
 ///
 #[derive(Getters)]
-pub(super) struct ReliableBroadcastInstance<RQ> {
-    #[get = "pub(super)"]
+pub(crate) struct ReliableBroadcastInstance<RQ> {
+    #[get = "pub(crate)"]
     sender: NodeId,
     #[get = ""]
     quorum_info: QuorumInfo,
@@ -81,8 +81,14 @@ where
     where
         NT: ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>,
     {
-        self.proposed_messages = Some(value.clone());
-
+        // Deliberately does not set `self.proposed_messages`/advance the state
+        // here: the broadcast below targets the whole quorum, which includes
+        // ourselves, so the SEND loops back through the normal receive path
+        // in `process_message` and initializes state/digest exactly as it
+        // would for any other node's proposal. Presetting those fields here
+        // would make that guard (`proposed_messages.is_none()`) fail, and the
+        // instance would then be stuck in `Init` forever, unable to ever
+        // process its own echoes.
         let message = ReliableBroadcastMessage::Send(value);
 
         let _ = network.broadcast(
@@ -92,7 +98,7 @@ where
     }
 
     /// Processes a message received from the network or queued in the pending messages.
-    pub(super) fn process_message<NT>(
+    pub(crate) fn process_message<NT>(
         &mut self,
         sys_msg: StoredMessage<ReliableBroadcastMessage<RQ>>,
         network: &NT,
@@ -171,7 +177,7 @@ where
         }
     }
 
-    fn get_current_digest(&self) -> Option<Digest> {
+    pub(crate) fn get_current_digest(&self) -> Option<Digest> {
         self.proposed_message_digest
     }
 
@@ -291,7 +297,7 @@ impl<RQ> Debug for ReliableBroadcastInstance<RQ> {
     }
 }
 
-pub(super) enum ReliableBroadcastResult<RQ> {
+pub(crate) enum ReliableBroadcastResult<RQ> {
     MessageIgnored,
     MessageQueued,
     Progressed(StoredMessage<ReliableBroadcastMessage<RQ>>),

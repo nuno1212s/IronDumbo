@@ -33,7 +33,7 @@ impl QuorumInfo {
     }
 }
 
-/// The keyset that 
+/// The keyset that
 pub struct ThresholdKeySet {
     private_key_set: PrivateKeySet,
 }
@@ -63,7 +63,6 @@ pub struct ThresholdKeys {
 }
 
 impl ThresholdKeys {
-
     pub fn new(public_key: PublicKeySet, private_key: PrivateKeyPart) -> Self {
         Self {
             public_key,

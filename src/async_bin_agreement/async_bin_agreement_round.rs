@@ -40,7 +40,7 @@ impl RoundData {
         }
     }
 
-    pub(super) fn accept_input(&mut self, input: bool) -> RoundDataVoteAcceptResult{
+    pub(super) fn accept_input(&mut self, input: bool) -> RoundDataVoteAcceptResult {
         match self.estimate {
             None => {
                 self.estimate = Some(input);
@@ -178,9 +178,11 @@ impl RoundData {
 
                 return self
                     .perform_coin_flip(&feasible_values, signatures)
-                    .unwrap_or(RoundDataVoteAcceptResult::Failed(self.estimate.unwrap_or_else(
-                        || feasible_values.first().cloned().unwrap_or_default()
-                    )));
+                    .unwrap_or(RoundDataVoteAcceptResult::Failed(
+                        self.estimate.unwrap_or_else(|| {
+                            feasible_values.first().cloned().unwrap_or_default()
+                        }),
+                    ));
             }
         }
 
@@ -224,8 +226,13 @@ impl RoundData {
             self.state = AsyncBinaryAgreementState::Finishing;
             self.estimate = Some(coin_flip_result);
 
-            if self.finish_round_data.try_register_broadcast(coin_flip_result) {
-                Ok(RoundDataVoteAcceptResult::BroadcastFinalized(coin_flip_result))
+            if self
+                .finish_round_data
+                .try_register_broadcast(coin_flip_result)
+            {
+                Ok(RoundDataVoteAcceptResult::BroadcastFinalized(
+                    coin_flip_result,
+                ))
             } else {
                 Ok(RoundDataVoteAcceptResult::Accepted)
             }

@@ -87,6 +87,35 @@ where
     pub fn is_running_fully(&self) -> bool {
         matches!(self, DumboRoundState::Running { .. })
     }
+
+    /// See [`RoundStateParts::all_value_rbcs_complete`].
+    pub(super) fn all_value_rbcs_complete(&self) -> bool {
+        matches!(self, DumboRoundState::Running(parts) if parts.all_value_rbcs_complete())
+    }
+
+    /// Transitions a `Running` round to `Done`, returning the finalized round
+    /// data. Must only be called once the running state has itself reported
+    /// [`EpochResult::Finalized`].
+    pub(super) fn take_final_data(&mut self) -> Result<RoundFinalData<RQ>, FinalizeRoundError> {
+        if !self.is_running_fully() {
+            return Err(FinalizeRoundError::RoundNotRunning);
+        }
+
+        // Swap in a lightweight placeholder so we can take ownership of the
+        // running state and consume it via `finish`.
+        let placeholder =
+            DumboRoundState::WaitingForCommitteeElection(CommitteeElectionState::Done);
+
+        let DumboRoundState::Running(running_state) = std::mem::replace(self, placeholder) else {
+            unreachable!("checked above that the round is running");
+        };
+
+        let final_data = running_state.finish()?;
+
+        *self = DumboRoundState::Done(RoundFinalData::new(Vec::new(), Vec::new(), Vec::new()));
+
+        Ok(final_data)
+    }
 }
 
 impl<CE, RQ, VR, IR, A> Debug for DumboRoundState<CE, RQ, VR, IR, A>
@@ -441,6 +470,25 @@ where
         if self.is_part_of_committee(owner_id) {}
     }
 
+    /// Whether every node's ValueRBC has completed (committee nodes reached
+    /// `WaitingForRBCs`, non-committee nodes reached `Completed`).
+    ///
+    /// NOTE: nothing in this codebase currently transitions a committee node
+    /// out of `WaitingForRBCs` into `RunningIndexRBC` -- `handle_value_rbc_finished`
+    /// above is an empty stub, and `RunningIndexRBC` is never constructed
+    /// anywhere. This accessor exists so tests can observe the ValueRBC phase
+    /// converging correctly without depending on the (currently unreachable)
+    /// IndexRBC/ABA/finalization phases downstream of it.
+    pub(super) fn all_value_rbcs_complete(&self) -> bool {
+        self.node_states.values().all(|state| {
+            matches!(
+                state,
+                NodeState::CommitteeNode(CommitteeNodeExecuting::WaitingForRBCs, _)
+                    | NodeState::NonCommitteeNode(NonCommitteeNodeExec::Completed, _)
+            )
+        })
+    }
+
     pub(super) fn process_index_rbc_message<NT, CE>(
         &mut self,
         round_data_arguments: RoundDataArguments,
@@ -780,7 +828,7 @@ where
 
     fn are_all_aba_finished(&self) -> bool {
         self.committee_nodes()
-            .any(|(_, state)| !matches!(state, CommitteeNodeState::ABA { .. }))
+            .all(|(_, state)| matches!(state, CommitteeNodeState::ABA { .. }))
     }
 
     fn get_final_index(&self) -> Vec<IndexType> {
@@ -1038,4 +1086,6 @@ enum ABAPreparationError<A> {
 pub(super) enum FinalizeRoundError {
     #[error("Failed to obtain requests from node state {0:?} as it is not in a supported state")]
     AccessValueOfNonAvailableNode(NodeId),
+    #[error("Attempted to finalize a round that is not currently running")]
+    RoundNotRunning,
 }

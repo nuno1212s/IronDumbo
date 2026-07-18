@@ -10,7 +10,7 @@ struct CurrentBatch<RQ>(Vec<StoredMessage<RQ>>, Digest);
 pub(super) struct RequestAggregator<RQ> {
     batch_output: BatchOutput<RQ>,
     quorum_info: QuorumInfo,
-    current_batch: Mutex<Option<CurrentBatch<RQ>>>
+    current_batch: Mutex<Option<CurrentBatch<RQ>>>,
 }
 
 impl<RQ> RequestAggregator<RQ> {
@@ -25,7 +25,9 @@ impl<RQ> RequestAggregator<RQ> {
     pub fn get_batch_and_reset(&self) -> (Vec<StoredMessage<RQ>>, Digest) {
         let mut batch_guard = self.current_batch.lock().unwrap();
 
-        let batch = batch_guard.take().unwrap_or(CurrentBatch(Vec::new(), Digest::blank()));
+        let batch = batch_guard
+            .take()
+            .unwrap_or(CurrentBatch(Vec::new(), Digest::blank()));
 
         (batch.0, batch.1)
     }
@@ -46,10 +48,10 @@ impl<RQ> RequestAggregator<RQ> {
 
     fn run(&self) {
         let requests = self.collect_requests();
-        
+
         self.add_messages_to_current_batch(requests);
     }
-    
+
     fn add_messages_to_current_batch(&self, mut requests: Vec<StoredMessage<RQ>>) {
         let mut batch_guard = self.current_batch.lock().unwrap();
 
@@ -65,15 +67,15 @@ impl<RQ> RequestAggregator<RQ> {
                 batch.1 = Self::calculate_digest_for(&batch.0);
             }
         }
-    } 
+    }
 
     fn calculate_digest_for(requests: &[StoredMessage<RQ>]) -> Digest {
         let mut context = Context::new();
 
-        requests.iter()
+        requests
+            .iter()
             .for_each(|request| context.update(request.header().digest().as_ref()));
 
         context.finish()
     }
 }
-
