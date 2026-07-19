@@ -5,6 +5,8 @@
 extern crate core;
 
 mod reliable_broadcast {
+    pub mod erasure_coding;
+    pub mod merkle;
     pub mod messages;
     pub mod reliable_broadcast;
 
@@ -32,12 +34,24 @@ mod async_bin_agreement {
 }
 
 pub mod aba;
+mod cbc;
 mod committee_election;
 mod consensus_rqs;
 pub mod mvba;
 pub mod prbc;
 pub mod rbc;
 mod rq_aggregator;
+mod threshold_coin_tossing;
+
+mod consistent_broadcast {
+    pub mod consistent_broadcast;
+    pub mod messages;
+
+    #[cfg(test)]
+    pub mod test {
+        pub mod cbc_test;
+    }
+}
 
 mod provable_reliable_broadcast {
     pub mod messages;

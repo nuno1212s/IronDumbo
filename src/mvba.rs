@@ -2,6 +2,7 @@ use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
 use atlas_common::crypto::hash::Digest;
 use atlas_common::crypto::threshold_crypto::CombinedSignature;
 use atlas_common::node_id::NodeId;
+use atlas_common::ordering::SeqNo;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
 use std::error::Error;
@@ -19,24 +20,34 @@ use std::fmt::Debug;
 pub type MVBAProposal = Vec<(NodeId, Digest, CombinedSignature)>;
 
 /// A Multi-Valued Byzantine Agreement protocol, as used by Dumbo2's second
-/// phase: given each node's set of PRBC proofs (`MVBAProposal`), agree on a
-/// common subset containing at least `n-f` entries, each independently
-/// verified.
+/// phase: given each node's set of PRBC proofs (`MVBAProposal`), agree on
+/// ONE node's proposed vector (Section 3's formal contract: "each party
+/// proposes a (different) value... the protocol ensures that the decision
+/// value was proposed by at least one party").
 ///
-/// This implementation runs one [`crate::aba::ABAProtocol`] instance per
-/// quorum member `owner`, each deciding "is `owner`'s PRBC entry included in
-/// the agreed set?". A node votes `true` for `owner` if it holds a valid PRBC
-/// proof for `owner` at the time [`MVBAProtocol::propose`] is called, `false`
-/// otherwise -- matching Dumbo2's algorithm 3.
+/// Implements the Cachin-Kursawe-Shoup/Abraham-Malkhi-Spiegelman
+/// construction the paper cites (Fig. 4/Section 5.1): every node first
+/// echoes its own candidate via Consistent Broadcast (`crate::cbc`), then
+/// all nodes derive one shared random permutation of candidates (via
+/// `crate::threshold_coin_tossing`, the same primitive Committee Election
+/// uses) and try them in that order, running a single `AsyncBinaryAgreement`
+/// per candidate until one is accepted -- giving an expected *constant*
+/// number of ABA instances (matching the paper's "three consecutive
+/// instances of ABA"), not one per quorum member.
 pub trait MVBAProtocol: Debug {
     type Message: SerMsg;
     type Error: Error + Send + Sync + 'static;
 
-    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys) -> Self;
+    /// `round` scopes the coin-toss id: the permutation must vary across
+    /// rounds of the same cluster/keyset or it becomes predictable after
+    /// the first round, defeating the unpredictability the expected-O(1)
+    /// termination bound relies on (the same reasoning that requires
+    /// Committee Election's `round` parameter).
+    fn new(quorum_info: QuorumInfo, threshold_keys: ThresholdKeys, round: SeqNo) -> Self;
 
     /// Called once this node has gathered its own candidate set of PRBC
-    /// proofs (typically once it has `n-f` of them). Kicks off one ABA vote
-    /// per quorum member.
+    /// proofs (typically once it has `n-f` of them). Echoes it via CBC to
+    /// kick off the agreement loop.
     fn propose<NT>(
         &mut self,
         proposal: MVBAProposal,

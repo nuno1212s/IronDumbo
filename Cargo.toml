@@ -30,3 +30,4 @@ strum_macros = "*"
 tracing = "*"
 
 serde = { version = "1.0", features = ["derive"] }
+reed-solomon-erasure = "6.0"

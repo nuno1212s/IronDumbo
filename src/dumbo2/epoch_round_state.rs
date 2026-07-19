@@ -212,7 +212,11 @@ where
             })
             .collect();
 
-        let mut mvba = MV::new(self.quorum_info.clone(), self.threshold_keys.clone());
+        let mut mvba = MV::new(
+            self.quorum_info.clone(),
+            self.threshold_keys.clone(),
+            self.seq_no,
+        );
         let wrapper =
             MvbaSendNodeWrapperRef::<RQ, PR::Message, MV::Message, NT>::new(self.seq_no, network);
 

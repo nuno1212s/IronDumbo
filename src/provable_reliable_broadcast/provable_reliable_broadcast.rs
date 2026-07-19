@@ -38,15 +38,13 @@ struct RbcNetworkAdapter<'a, NT> {
     inner: &'a NT,
 }
 
-impl<'a, RQ, NT> ReliableBroadcastSendNode<ReliableBroadcastMessage<RQ>>
-    for RbcNetworkAdapter<'a, NT>
+impl<'a, NT> ReliableBroadcastSendNode<ReliableBroadcastMessage> for RbcNetworkAdapter<'a, NT>
 where
-    RQ: SerMsg,
-    NT: PRBCSendNode<PRBCMessage<RQ>>,
+    NT: PRBCSendNode<PRBCMessage>,
 {
     fn send(
         &self,
-        message: ReliableBroadcastMessage<RQ>,
+        message: ReliableBroadcastMessage,
         target: NodeId,
         flush: bool,
     ) -> atlas_common::error::Result<()> {
@@ -54,11 +52,7 @@ where
             .send(rbc_message_to_prbc_message(message), target, flush)
     }
 
-    fn broadcast<I>(
-        &self,
-        message: ReliableBroadcastMessage<RQ>,
-        targets: I,
-    ) -> Result<(), Vec<NodeId>>
+    fn broadcast<I>(&self, message: ReliableBroadcastMessage, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
     {
@@ -67,10 +61,10 @@ where
     }
 }
 
-fn rbc_message_to_prbc_message<RQ>(message: ReliableBroadcastMessage<RQ>) -> PRBCMessage<RQ> {
+fn rbc_message_to_prbc_message(message: ReliableBroadcastMessage) -> PRBCMessage {
     match message {
-        ReliableBroadcastMessage::Send(value) => PRBCMessage::Send(value),
-        ReliableBroadcastMessage::Echo(digest) => PRBCMessage::Echo(digest),
+        ReliableBroadcastMessage::Val(part) => PRBCMessage::Val(part),
+        ReliableBroadcastMessage::Echo(part) => PRBCMessage::Echo(part),
         ReliableBroadcastMessage::Ready(digest) => PRBCMessage::Ready(digest),
     }
 }
@@ -87,7 +81,7 @@ pub(crate) struct ProvableReliableBroadcastInstance<RQ> {
     finalized_digest: Option<Digest>,
     done_shares: HashMap<NodeId, PartialSignature>,
     combined_signature: Option<CombinedSignature>,
-    pending: VecDeque<StoredMessage<PRBCMessage<RQ>>>,
+    pending: VecDeque<StoredMessage<PRBCMessage>>,
 }
 
 impl<RQ> ProvableReliableBroadcastInstance<RQ>
@@ -96,11 +90,11 @@ where
 {
     fn on_inner_finalized<NT>(&mut self, network: &NT) -> Result<PRBCResult, PRBCError>
     where
-        NT: PRBCSendNode<PRBCMessage<RQ>>,
+        NT: PRBCSendNode<PRBCMessage>,
     {
         let digest = self
             .inner
-            .get_current_digest()
+            .finalized_digest()
             .expect("a finalized inner broadcast always has a digest");
 
         self.finalized_digest = Some(digest);
@@ -124,7 +118,7 @@ where
 
     fn try_combine<NT>(&mut self, network: &NT) -> Result<PRBCResult, PRBCError>
     where
-        NT: PRBCSendNode<PRBCMessage<RQ>>,
+        NT: PRBCSendNode<PRBCMessage>,
     {
         // The keyset is generated with `threshold = f`, so `f+1` shares are
         // required to combine (see `testing::fixtures::make_keyset`).
@@ -164,11 +158,11 @@ where
         &mut self,
         from: NodeId,
         share: PartialSignature,
-        original: StoredMessage<PRBCMessage<RQ>>,
+        original: StoredMessage<PRBCMessage>,
         network: &NT,
     ) -> Result<PRBCResult, PRBCError>
     where
-        NT: PRBCSendNode<PRBCMessage<RQ>>,
+        NT: PRBCSendNode<PRBCMessage>,
     {
         match self.state {
             PRBCState::Broadcasting => {
@@ -201,7 +195,7 @@ where
     fn handle_finish(
         &mut self,
         signature: CombinedSignature,
-        original: StoredMessage<PRBCMessage<RQ>>,
+        original: StoredMessage<PRBCMessage>,
     ) -> Result<PRBCResult, PRBCError> {
         match self.state {
             PRBCState::Broadcasting => {
@@ -237,7 +231,7 @@ impl<RQ> PRBCProtocol<RQ> for ProvableReliableBroadcastInstance<RQ>
 where
     RQ: SerMsg,
 {
-    type Message = PRBCMessage<RQ>;
+    type Message = PRBCMessage;
     type Error = PRBCError;
 
     fn new(owner_id: NodeId, quorum_info: QuorumInfo, threshold_keys: ThresholdKeys) -> Self {
@@ -309,22 +303,22 @@ where
         if matches!(self.state, PRBCState::Finished)
             && matches!(
                 message.message(),
-                PRBCMessage::Send(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_)
+                PRBCMessage::Val(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_)
             )
         {
             return Ok(PRBCResult::MessageIgnored);
         }
 
         match message.message() {
-            PRBCMessage::Send(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_) => {
+            PRBCMessage::Val(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_) => {
                 let (header, msg) = message.into_inner();
 
                 let rbc_msg = match msg {
-                    PRBCMessage::Send(value) => ReliableBroadcastMessage::Send(value),
-                    PRBCMessage::Echo(digest) => ReliableBroadcastMessage::Echo(digest),
+                    PRBCMessage::Val(part) => ReliableBroadcastMessage::Val(part),
+                    PRBCMessage::Echo(part) => ReliableBroadcastMessage::Echo(part),
                     PRBCMessage::Ready(digest) => ReliableBroadcastMessage::Ready(digest),
                     PRBCMessage::Done(_) | PRBCMessage::Finish(_) => {
-                        unreachable!("checked above that this is a Send/Echo/Ready variant")
+                        unreachable!("checked above that this is a Val/Echo/Ready variant")
                     }
                 };
 
@@ -335,8 +329,7 @@ where
 
                 match result {
                     ReliableBroadcastResult::MessageIgnored => Ok(PRBCResult::MessageIgnored),
-                    ReliableBroadcastResult::MessageQueued => Ok(PRBCResult::MessageQueued),
-                    ReliableBroadcastResult::Progressed(_) => Ok(PRBCResult::Processed),
+                    ReliableBroadcastResult::Processed => Ok(PRBCResult::Processed),
                     ReliableBroadcastResult::Finalized => self.on_inner_finalized(network),
                 }
             }
@@ -348,7 +341,7 @@ where
                 match msg {
                     PRBCMessage::Done(share) => self.handle_done(from, share, original, network),
                     PRBCMessage::Finish(signature) => self.handle_finish(signature, original),
-                    PRBCMessage::Send(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_) => {
+                    PRBCMessage::Val(_) | PRBCMessage::Echo(_) | PRBCMessage::Ready(_) => {
                         unreachable!("checked above that this is a Done/Finish variant")
                     }
                 }

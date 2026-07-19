@@ -62,9 +62,13 @@ impl RoundData {
         estimate: bool,
     ) -> RoundDataVoteAcceptResult {
         match self.state {
-            AsyncBinaryAgreementState::CollectingVal => self.insert_estimate(sender, estimate),
-            // If we are collecting ready messages, we ignore the estimate as we already completed it
-            _ => RoundDataVoteAcceptResult::Ignored,
+            // Algorithm 7 lines 3-7 are standing handlers active for the
+            // whole round, not gated to a single phase: a Val vote must
+            // keep being counted (and may grow values_r) even after this
+            // node has moved on to collecting AUX/CONF votes. Only once
+            // we've fully decided (Finishing) is a further Val vote moot.
+            AsyncBinaryAgreementState::Finishing => RoundDataVoteAcceptResult::Ignored,
+            _ => self.insert_estimate(sender, estimate),
         }
     }
 
@@ -75,13 +79,33 @@ impl RoundData {
         };
 
         if current_votes > 2 * self.f {
-            self.values_r.insert(estimate);
+            let is_new_value = self.values_r.insert(estimate);
 
-            self.state = AsyncBinaryAgreementState::CollectingAux;
+            if is_new_value {
+                if self.state == AsyncBinaryAgreementState::CollectingVal {
+                    self.state = AsyncBinaryAgreementState::CollectingAux;
 
-            return RoundDataVoteAcceptResult::BroadcastAux(
-                self.values_r.clone().into_iter().collect(),
-            );
+                    return RoundDataVoteAcceptResult::BroadcastAux(
+                        self.values_r.clone().into_iter().collect(),
+                    );
+                }
+
+                // A later value crossed 2f+1 after we already left
+                // CollectingVal. AUX is only ever broadcast once (line
+                // 8-9), so we don't re-broadcast here -- but values_r
+                // growing may now let a peer's AUX/CONF vote that arrived
+                // too early (and was merely `Accepted` at the time)
+                // satisfy its subset check.
+                if let Some(result) = self.recheck_pending_aux() {
+                    return result;
+                }
+
+                if let Some(result) = self.recheck_pending_conf() {
+                    return result;
+                }
+            }
+
+            return RoundDataVoteAcceptResult::Accepted;
         }
 
         if current_votes > self.f && self.val_data.broadcast_estimates.insert(estimate) {
@@ -90,6 +114,85 @@ impl RoundData {
         }
 
         RoundDataVoteAcceptResult::Accepted
+    }
+
+    /// Re-evaluates already-received AUX votes against the current
+    /// `values_r` (Algorithm 7 line 10: `val_r ⊆ values_r`). A matching AUX
+    /// vote may have arrived before `values_r` grew enough to satisfy this
+    /// check; without this re-check it would sit "accepted but blocked"
+    /// forever once no further AUX messages arrive.
+    fn recheck_pending_aux(&mut self) -> Option<RoundDataVoteAcceptResult> {
+        if self.state != AsyncBinaryAgreementState::CollectingAux {
+            return None;
+        }
+
+        let f = self.f;
+        let values_r = self.values_r.clone();
+
+        let now_satisfied =
+            self.aux_round_data
+                .received_aux
+                .iter()
+                .any(|(accepted_estimates, voters)| {
+                    if voters.len() <= 2 * f {
+                        return false;
+                    }
+
+                    let accepted_set: HashSet<bool> = accepted_estimates.iter().cloned().collect();
+
+                    values_r.is_superset(&accepted_set) || values_r == accepted_set
+                });
+
+        if now_satisfied {
+            self.state = AsyncBinaryAgreementState::CollectingConf;
+
+            Some(RoundDataVoteAcceptResult::BroadcastConf(
+                values_r.into_iter().collect(),
+            ))
+        } else {
+            None
+        }
+    }
+
+    /// Symmetric re-check for CONF votes (Algorithm 7 line 12), for the
+    /// rarer case where a very late Val vote grows `values_r` during the
+    /// CONF phase.
+    fn recheck_pending_conf(&mut self) -> Option<RoundDataVoteAcceptResult> {
+        if self.state != AsyncBinaryAgreementState::CollectingConf {
+            return None;
+        }
+
+        let f = self.f;
+        let values_r = self.values_r.clone();
+
+        let matching =
+            self.conf_round_data
+                .received_conf
+                .iter()
+                .find_map(|(feasible_values, signers)| {
+                    if signers.len() <= 2 * f {
+                        return None;
+                    }
+
+                    let feasible_set: HashSet<bool> = feasible_values.iter().cloned().collect();
+
+                    if values_r.is_superset(&feasible_set) || values_r == feasible_set {
+                        Some(feasible_values.clone())
+                    } else {
+                        None
+                    }
+                })?;
+
+        let signatures = self.conf_round_data.get_signatures_for_values(&matching);
+
+        Some(
+            self.perform_coin_flip(&matching, signatures).unwrap_or(
+                RoundDataVoteAcceptResult::Failed(
+                    self.estimate
+                        .unwrap_or_else(|| matching.first().cloned().unwrap_or_default()),
+                ),
+            ),
+        )
     }
 
     pub(super) fn accept_auxiliary(
@@ -191,7 +294,7 @@ impl RoundData {
 
     fn perform_coin_flip(
         &mut self,
-        winning_set: &Vec<bool>,
+        winning_set: &[bool],
         partial_signature: Vec<(NodeId, PartialSignature)>,
     ) -> Result<RoundDataVoteAcceptResult, CombineSignatureError> {
         let signatures = partial_signature

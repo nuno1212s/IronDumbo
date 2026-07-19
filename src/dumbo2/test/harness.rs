@@ -260,6 +260,7 @@ impl Dumbo2TestCluster {
         // different private share of the *same* public key set, so
         // threshold signatures produced by one node verify for all others.
         let keyset = crate::testing::fixtures::make_keyset(f);
+        let cbc_keyset = crate::testing::fixtures::make_cbc_keyset(f);
 
         let mut nodes = HashMap::new();
         let mut send_nodes = HashMap::new();
@@ -269,6 +270,8 @@ impl Dumbo2TestCluster {
             let threshold_keys = ThresholdKeys::new(
                 keyset.public_key_set(),
                 keyset.private_key_part(id.0 as usize),
+                cbc_keyset.public_key_set(),
+                cbc_keyset.private_key_part(id.0 as usize),
             );
 
             let (_tx, rx) = atlas_common::channel::sync::new_bounded_sync(1, None::<String>);

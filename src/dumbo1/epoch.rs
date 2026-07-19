@@ -73,7 +73,12 @@ where
     ) -> Self {
         let required_committee = quorum_info.f() + 1;
 
-        let committee_election_protocol = CE::new(quorum_info.clone(), required_committee);
+        let committee_election_protocol = CE::new(
+            quorum_info.clone(),
+            threshold_keys.clone(),
+            required_committee,
+            epoch_num,
+        );
 
         Self {
             epoch_num,

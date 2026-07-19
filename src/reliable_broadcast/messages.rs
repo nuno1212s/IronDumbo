@@ -1,37 +1,27 @@
+use crate::reliable_broadcast::merkle::MerkleBranch;
 use atlas_common::crypto::hash::Digest;
 use serde::{Deserialize, Serialize};
 
-#[derive(Debug, Serialize, Deserialize)]
-pub(crate) enum ReliableBroadcastMessage<RQ> {
-    Send(RQ),
-    Echo(Digest),
+/// One erasure-coded shard plus its Merkle inclusion proof against a
+/// claimed root. Carries no leaf-index/leaf-count field: the recipient
+/// derives its shard index from the authenticated sender identity via
+/// `QuorumInfo::leaf_index_of`, never trusting it from the wire.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) struct ErasureCodedPart {
+    pub(crate) root: Digest,
+    pub(crate) branch: MerkleBranch,
+    pub(crate) shard: Vec<u8>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub(crate) enum ReliableBroadcastMessage {
+    /// Algorithm 5 line 4: a per-recipient unicast carrying that
+    /// recipient's own shard + branch (renamed from `Send` to match the
+    /// paper's terminology and avoid confusion with the `Send`/`Sync`
+    /// auto traits).
+    Val(ErasureCodedPart),
+    /// Algorithm 5 line 6.
+    Echo(ErasureCodedPart),
+    /// Algorithm 5 lines 12/14.
     Ready(Digest),
-}
-
-impl<RQ> PartialEq for ReliableBroadcastMessage<RQ> {
-    fn eq(&self, other: &Self) -> bool {
-        match (self, other) {
-            (ReliableBroadcastMessage::Send(_), ReliableBroadcastMessage::Send(_)) => false,
-            (ReliableBroadcastMessage::Echo(d1), ReliableBroadcastMessage::Echo(d2)) => d1 == d2,
-            (ReliableBroadcastMessage::Ready(d1), ReliableBroadcastMessage::Ready(d2)) => d1 == d2,
-            _ => false,
-        }
-    }
-}
-
-impl<RQ> Eq for ReliableBroadcastMessage<RQ> where RQ: PartialEq {}
-
-impl<RQ> Clone for ReliableBroadcastMessage<RQ>
-where
-    RQ: Clone,
-{
-    fn clone(&self) -> Self {
-        match self {
-            ReliableBroadcastMessage::Send(messages) => {
-                ReliableBroadcastMessage::Send(messages.clone())
-            }
-            ReliableBroadcastMessage::Echo(digest) => ReliableBroadcastMessage::Echo(*digest),
-            ReliableBroadcastMessage::Ready(digest) => ReliableBroadcastMessage::Ready(*digest),
-        }
-    }
 }

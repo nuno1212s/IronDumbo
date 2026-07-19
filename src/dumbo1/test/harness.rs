@@ -74,7 +74,12 @@ impl CommitteeElectionProtocol for TestCommitteeElection {
     type Message = CommitteeKickoff;
     type CEError = std::convert::Infallible;
 
-    fn new(quorum_info: QuorumInfo, committee_size: usize) -> Self {
+    fn new(
+        quorum_info: QuorumInfo,
+        _threshold_keys: ThresholdKeys,
+        committee_size: usize,
+        _round: SeqNo,
+    ) -> Self {
         let mut committee = quorum_info.quorum_members().clone();
         committee.sort();
         committee.truncate(committee_size.max(1));
@@ -326,9 +331,12 @@ impl Dumbo1TestCluster {
         for &id in &members {
             let quorum_info = QuorumInfo::new(n, f, members.clone(), id);
             let keyset = crate::testing::fixtures::make_keyset(f);
+            let cbc_keyset = crate::testing::fixtures::make_cbc_keyset(f);
             let threshold_keys = ThresholdKeys::new(
                 keyset.public_key_set(),
                 keyset.private_key_part(id.0 as usize),
+                cbc_keyset.public_key_set(),
+                cbc_keyset.private_key_part(id.0 as usize),
             );
 
             let (_tx, rx) = atlas_common::channel::sync::new_bounded_sync(1, None::<String>);

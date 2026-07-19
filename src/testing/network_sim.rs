@@ -1,4 +1,6 @@
 use crate::aba::AsyncBinaryAgreementSendNode;
+use crate::cbc::CBCSendNode;
+use crate::committee_election::CommitteeElectionSendNode;
 use crate::mvba::MVBASendNode;
 use crate::prbc::PRBCSendNode;
 use crate::rbc::ReliableBroadcastSendNode;
@@ -136,6 +138,50 @@ where
     fn broadcast<I>(&self, message: M, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>,
+    {
+        self.bus
+            .borrow_mut()
+            .broadcast(self.own_id, targets, message);
+
+        Ok(())
+    }
+}
+
+impl<'a, M> CBCSendNode<M> for NodeHandle<'a, M>
+where
+    M: SerMsg,
+{
+    fn send(&self, message: M, target: NodeId, _flush: bool) -> atlas_common::error::Result<()> {
+        self.bus.borrow_mut().send(self.own_id, target, message);
+
+        Ok(())
+    }
+
+    fn broadcast<I>(&self, message: M, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: Iterator<Item = NodeId>,
+    {
+        self.bus
+            .borrow_mut()
+            .broadcast(self.own_id, targets, message);
+
+        Ok(())
+    }
+}
+
+impl<'a, M> CommitteeElectionSendNode<M> for NodeHandle<'a, M>
+where
+    M: SerMsg,
+{
+    fn send(&self, message: M, target: NodeId, _flush: bool) -> atlas_common::error::Result<()> {
+        self.bus.borrow_mut().send(self.own_id, target, message);
+
+        Ok(())
+    }
+
+    fn broadcast<I>(&self, message: M, targets: I) -> Result<(), Vec<NodeId>>
+    where
+        I: IntoIterator<Item = NodeId>,
     {
         self.bus
             .borrow_mut()

@@ -70,9 +70,16 @@ impl TestData {
         let qi = quorum_info(n, f, id);
         let key_set = PrivateKeySet::gen_random(f);
         let pk_set = key_set.public_key_set();
+        // ABA itself never touches the CBC keyset; generated here only
+        // because ThresholdKeys::new requires one.
+        let cbc_key_set = PrivateKeySet::gen_random(2 * f);
 
-        let threshold_keys =
-            ThresholdKeys::new(pk_set.clone(), key_set.private_key_part(id.0 as usize));
+        let threshold_keys = ThresholdKeys::new(
+            pk_set.clone(),
+            key_set.private_key_part(id.0 as usize),
+            cbc_key_set.public_key_set(),
+            cbc_key_set.private_key_part(id.0 as usize),
+        );
 
         let aba = AsyncBinaryAgreement::new(qi.clone(), threshold_keys);
 
@@ -166,7 +173,14 @@ fn test_val_round_second_stage() {
 }
 
 #[test]
-fn test_val_round_ignored() {
+fn test_val_round_redundant_vote_for_already_accepted_value_is_processed_not_ignored() {
+    // A Val vote for a value that has *already* crossed 2f+1 (from a
+    // sender who hasn't voted yet) is legitimate, harmless bookkeeping --
+    // Algorithm 7 lines 6-7 have no phase gate, so this must be accepted
+    // (a no-op past the threshold), not blanket-ignored. Blanket-ignoring
+    // every post-CollectingVal Val vote (the old behavior this test used
+    // to pin) is exactly the bug that let a late vote for a *different*
+    // value get dropped too, see `test_late_val_for_second_value_is_still_counted_toward_values_r`.
     const INITIAL_ESTIMATE: bool = true;
 
     let mut test_data = TestData::new(NodeId(0), N, F);
@@ -175,11 +189,44 @@ fn test_val_round_ignored() {
 
     perform_full_val_round(&mut test_data, test_message.clone());
 
-    // Send one more message, this should be ignored
+    let sent_before = test_data.network().sent.borrow().len();
+
+    // Send one more vote for the *same*, already-accepted value.
     let result = test_data.accept_message(NodeId::from(2 * F + 1), test_message.clone());
 
+    assert!(!matches!(
+        result,
+        AsyncBinaryAgreementResult::MessageIgnored
+    ));
+    // No new broadcast: the value was already in values_r and AUX was
+    // already sent once.
+    assert_eq!(sent_before, test_data.network().sent.borrow().len());
+}
+
+#[test]
+fn test_val_round_message_after_finishing_is_ignored() {
+    const INITIAL_ESTIMATE: bool = true;
+
+    let mut test_data = TestData::new(NodeId(0), N, F);
+
+    let round = perform_all_rounds_until_conf_success(&mut test_data, INITIAL_ESTIMATE);
+
+    for i in 0..(2 * F + 1) {
+        let finish_message = get_finish_message(INITIAL_ESTIMATE, Some(round));
+        test_data.accept_message(NodeId::from(i), finish_message);
+    }
+
+    assert!(matches!(
+        test_data.aba.current_round().state(),
+        AsyncBinaryAgreementState::Finishing {}
+    ));
+
+    let result = test_data.accept_message(
+        NodeId::from(2 * F + 5),
+        get_val_message(!INITIAL_ESTIMATE, Some(round)),
+    );
+
     assert!(matches!(result, AsyncBinaryAgreementResult::MessageIgnored));
-    assert_eq!(2, test_data.network().sent.borrow().len());
 }
 
 pub(super) fn get_aux_message(

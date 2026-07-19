@@ -1,10 +1,13 @@
 use crate::aba::ABAProtocol;
 use crate::async_bin_agreement::async_bin_agreement::AsyncBinaryAgreement;
 use crate::quorum_info::quorum_info::{QuorumInfo, ThresholdKeys};
-use crate::reliable_broadcast::reliable_broadcast::ReliableBroadcastInstance;
+use crate::reliable_broadcast::erasure_coding::{self, ErasureParams};
+use crate::reliable_broadcast::merkle;
+use crate::reliable_broadcast::messages::ErasureCodedPart;
 use atlas_common::crypto::hash::{Context, Digest};
 use atlas_common::crypto::threshold_crypto::PrivateKeySet;
 use atlas_common::node_id::NodeId;
+use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::lookup_table::MessageModule;
 use atlas_communication::message::{Buf, StoredMessage, WireMessage};
 
@@ -20,10 +23,23 @@ pub fn make_keyset(f: usize) -> PrivateKeySet {
     PrivateKeySet::gen_random(f)
 }
 
-pub fn make_threshold_keys(keyset: &PrivateKeySet, node: NodeId) -> ThresholdKeys {
+/// The independent `2f`-threshold keyset CBC's Echo/Finish combine step
+/// needs (see `ThresholdKeys`'s doc comment) -- a distinct polynomial from
+/// `make_keyset`, not derivable from it.
+pub fn make_cbc_keyset(f: usize) -> PrivateKeySet {
+    PrivateKeySet::gen_random(2 * f)
+}
+
+pub fn make_threshold_keys(
+    keyset: &PrivateKeySet,
+    cbc_keyset: &PrivateKeySet,
+    node: NodeId,
+) -> ThresholdKeys {
     ThresholdKeys::new(
         keyset.public_key_set(),
         keyset.private_key_part(node.0 as usize),
+        cbc_keyset.public_key_set(),
+        cbc_keyset.private_key_part(node.0 as usize),
     )
 }
 
@@ -56,21 +72,30 @@ pub fn stored_msg_with_digest<T>(
     StoredMessage::new(wire_msg.header().clone(), msg)
 }
 
-/// Bootstraps `n` [`ReliableBroadcastInstance`]s (tolerating `f` faults) that
-/// share a common quorum, one per node, ready to have SEND/ECHO/READY
-/// messages driven through them.
-pub fn bootstrap_rbc_cluster(
+/// Erasure-codes + Merkle-trees `value` for a quorum of size `n` tolerating
+/// `f` faults (Algorithm 5), returning the root and one [`ErasureCodedPart`]
+/// per leaf index -- callers pick `parts[quorum.leaf_index_of(member)]` when
+/// constructing `Val`/`Echo` messages for a given recipient/sender.
+pub fn make_erasure_coded_parts<RQ: SerMsg>(
+    value: &RQ,
     n: usize,
     f: usize,
-) -> Vec<(NodeId, ReliableBroadcastInstance<Vec<u8>>)> {
-    node_ids(n)
-        .into_iter()
-        .map(|id| {
-            let quorum = quorum_info(n, f, id);
+) -> (Digest, Vec<ErasureCodedPart>) {
+    let params = ErasureParams::for_quorum(n, f);
+    let shards = erasure_coding::encode(value, &params).expect("encode should succeed in tests");
+    let (root, branches) = merkle::build_tree(&shards);
 
-            (id, ReliableBroadcastInstance::<Vec<u8>>::new(id, quorum))
+    let parts = shards
+        .into_iter()
+        .zip(branches)
+        .map(|(shard, branch)| ErasureCodedPart {
+            root,
+            branch,
+            shard,
         })
-        .collect()
+        .collect();
+
+    (root, parts)
 }
 
 /// Bootstraps `n` [`AsyncBinaryAgreement`]s (tolerating `f` faults) that
@@ -81,12 +106,13 @@ pub fn bootstrap_aba_cluster(
     f: usize,
 ) -> (Vec<(NodeId, AsyncBinaryAgreement)>, PrivateKeySet) {
     let keyset = make_keyset(f);
+    let cbc_keyset = make_cbc_keyset(f);
 
     let nodes = node_ids(n)
         .into_iter()
         .map(|id| {
             let quorum = quorum_info(n, f, id);
-            let threshold_keys = make_threshold_keys(&keyset, id);
+            let threshold_keys = make_threshold_keys(&keyset, &cbc_keyset, id);
 
             (id, AsyncBinaryAgreement::new(quorum, threshold_keys))
         })
