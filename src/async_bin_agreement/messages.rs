@@ -3,28 +3,28 @@ use getset::{CopyGetters, Getters};
 use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Clone, PartialEq, Eq, Getters, CopyGetters, Serialize, Deserialize)]
-pub(super) struct AsyncBinaryAgreementMessage {
-    #[get_copy = "pub(super)"]
+pub(crate) struct AsyncBinaryAgreementMessage {
+    #[get_copy = "pub(crate)"]
     round: usize,
     #[get = "pub"]
     message_type: AsyncBinaryAgreementMessageType,
 }
 
 impl AsyncBinaryAgreementMessage {
-    pub(super) fn new(message_type: AsyncBinaryAgreementMessageType, round: usize) -> Self {
+    pub(crate) fn new(message_type: AsyncBinaryAgreementMessageType, round: usize) -> Self {
         Self {
             message_type,
             round,
         }
     }
 
-    pub(super) fn into_inner(self) -> (usize, AsyncBinaryAgreementMessageType) {
+    pub(crate) fn into_inner(self) -> (usize, AsyncBinaryAgreementMessageType) {
         (self.round, self.message_type)
     }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub(super) enum AsyncBinaryAgreementMessageType {
+pub(crate) enum AsyncBinaryAgreementMessageType {
     Val {
         estimate: bool,
     },

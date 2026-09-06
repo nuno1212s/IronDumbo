@@ -1,34 +1,39 @@
-use crate::reliable_broadcast::messages::ReliableBroadcastMessage;
+use crate::quorum_info::quorum_info::QuorumInfo;
+use atlas_common::crypto::hash::Digest;
 use atlas_common::node_id::NodeId;
 use atlas_common::serialization_helper::SerMsg;
 use atlas_communication::message::StoredMessage;
-use atlas_core::ordering_protocol::networking::OrderProtocolSendNode;
-use atlas_core::ordering_protocol::networking::serialize::OrderingProtocolMessage;
-use std::marker::PhantomData;
-use std::sync::Arc;
+use std::error::Error;
+use std::fmt::Debug;
 
 /// A trait representing a reliable broadcast protocol.
 /// The protocol ensures that messages broadcasted by a node are reliably delivered to all correct nodes in the network.
-///
-pub trait ReliableBroadcast<RQ> {
+pub trait ReliableBroadcast<RQ>: Debug {
     type ReliableBroadcastMessage: SerMsg;
-    fn new() -> Self;
+    type Error: Error + Send + Sync + 'static;
 
-    fn new_with_propose<NT>(request: RQ, network: &NT) -> Self
+    fn new(owner_id: NodeId, quorum_info: QuorumInfo) -> Self;
+
+    fn new_with_propose<NT>(
+        owner_id: NodeId,
+        quorum_info: QuorumInfo,
+        request: RQ,
+        network: &NT,
+    ) -> Self
     where
         NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>;
 
-    fn poll(&mut self) -> Option<Self::ReliableBroadcastMessage>;
+    fn poll(&mut self) -> Option<StoredMessage<Self::ReliableBroadcastMessage>>;
 
     fn process_message<NT>(
         &mut self,
         message: StoredMessage<Self::ReliableBroadcastMessage>,
         network: &NT,
-    ) -> ReliableBroadcastResult
+    ) -> Result<ReliableBroadcastResult, Self::Error>
     where
         NT: ReliableBroadcastSendNode<Self::ReliableBroadcastMessage>;
 
-    fn finalize(self) -> RQ;
+    fn finalize(self) -> Result<(RQ, Digest), Self::Error>;
 }
 
 pub enum ReliableBroadcastResult {
@@ -38,40 +43,21 @@ pub enum ReliableBroadcastResult {
     Finalized,
 }
 
-pub(super) trait ReliableBroadcastSendNode<BCM>
+pub trait ReliableBroadcastSendNode<BCM>
 where
     BCM: SerMsg,
 {
-    /// Sends a message to a given target.
+    /// Sends a signed message to a given target
     /// Does not block on the message sent. Returns a result that is
     /// Ok if there is a current connection to the target or err if not. No other checks are made
     /// on the success of the message dispatch
     fn send(&self, message: BCM, target: NodeId, flush: bool) -> atlas_common::error::Result<()>;
 
-    /// Sends a signed message to a given target
-    /// Does not block on the message sent. Returns a result that is
-    /// Ok if there is a current connection to the target or err if not. No other checks are made
-    /// on the success of the message dispatch
-    fn send_signed(
-        &self,
-        message: BCM,
-        target: NodeId,
-        flush: bool,
-    ) -> atlas_common::error::Result<()>;
-
     /// Broadcast a message to all of the given targets
     /// Does not block on the message sent. Returns a result that is
     /// Ok if there is a current connection to the targets or err if not. No other checks are made
     /// on the success of the message dispatch
-    fn broadcast<I>(&self, message: BCM, targets: I) -> std::result::Result<(), Vec<NodeId>>
-    where
-        I: Iterator<Item = NodeId>;
-
-    /// Broadcast a signed message for all of the given targets
-    /// Does not block on the message sent. Returns a result that is
-    /// Ok if there is a current connection to the targets or err if not. No other checks are made
-    /// on the success of the message dispatch
-    fn broadcast_signed<I>(&self, message: BCM, targets: I) -> std::result::Result<(), Vec<NodeId>>
+    fn broadcast<I>(&self, message: BCM, targets: I) -> Result<(), Vec<NodeId>>
     where
         I: Iterator<Item = NodeId>;
 }
